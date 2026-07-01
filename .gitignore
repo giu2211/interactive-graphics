@@ -1,10 +1,40 @@
+# ===== project-specific =====
 # course material — not part of the submission
 Project_Requirements.pdf
 
 # working documents (the report will be added explicitly when final)
 *.docx
 
-# office/editor temporary files
-~$*
+# ===== dependencies =====
+node_modules/
+package-lock.json
+
+# ===== logs =====
+*.log
+npm-debug.log*
+logs/
+
+# ===== environment / secrets =====
+.env
+.env.*
+
+# ===== build output =====
+dist/
+build/
+out/
+
+# ===== editor / IDE =====
+.vscode/
+.idea/
+*.suo
+*.swp
+*.swo
+
+# ===== OS junk =====
 .DS_Store
 Thumbs.db
+desktop.ini
+
+# ===== office temp files =====
+~$*
+*.tmp
