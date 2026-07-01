@@ -1,0 +1,10 @@
+# course material — not part of the submission
+Project_Requirements.pdf
+
+# working documents (the report will be added explicitly when final)
+*.docx
+
+# office/editor temporary files
+~$*
+.DS_Store
+Thumbs.db
