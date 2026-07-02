@@ -358,13 +358,24 @@ function updateRocks(cx, cz){
       being an obstacle.
    O: the boulder is set down on the terrain just beyond the rover's
       front and becomes a normal obstacle again.
+   T: the boulder is THROWN forward instead: it flies on a ballistic
+      arc under real Mars gravity, then ROLLS following the terrain
+      gradient — down a crater wall it keeps rolling, oscillates
+      across the bowl and settles at the bottom, or it stops early
+      against another boulder.
    Bookkeeping: a touched rock leaves the procedural world forever
    (movedRocks marks its id, so updateRocks won't respawn it) and,
-   once released, lives in placedRocks — a permanent list checked by
-   the collision loop together with the procedural rocks.
+   once it comes to rest, lives in placedRocks — a permanent list
+   checked by the collision loop together with the procedural rocks.
    ===================================================================== */
 const placedRocks = [];                        // boulders the rover re-placed
-function* obstacles(){ yield* activeRocks.values(); yield* placedRocks; }
+function* obstacles(){
+  yield* activeRocks.values();
+  yield* placedRocks;
+  /* a thrown rock is STILL solid while it flies and rolls — without
+     this the rover could drive straight through it before it settles */
+  for(const f of flyingRocks) yield f.mesh;
+}
 
 function grabRock(){
   if(carried) return;                          // hands already full
@@ -372,6 +383,7 @@ function grabRock(){
   let best = null, bestD = Infinity;
   for(const mesh of obstacles()){
     if(!mesh.userData.big) continue;           // only boulders need the arms
+    if(flyingRocks.some(f => f.mesh === mesh)) continue;  // can't catch a moving rock
     const dx = mesh.position.x - px, dz = mesh.position.z - pz;
     const d = Math.hypot(dx, dz);
     const reachDist = mesh.userData.radius * 0.85 + 1.0 + 1.8; // contact + arms
@@ -404,6 +416,128 @@ function dropRock(){
   movedRocks.set(carried.userData.id, {x, z});      // bookkeeping
   placedRocks.push(carried);                        // permanent obstacle now
   carried = null;                                   // arms retract in the loop
+}
+
+/* --- THROWING --- */
+const MARS_G = 3.71;          // real Mars gravity, m/s^2 (Earth is 9.81)
+const flyingRocks = [];       // rocks currently flying or rolling
+const _rollAxis = new THREE.Vector3();   // scratch vector, reused every frame
+
+function throwRock(){
+  if(!carried) return;
+  const mesh = carried;
+  carried = null;                        // arms retract in the loop
+  rockGroup.attach(mesh);                // back to world space, keeps position
+  /* a gentle toss, not a hurl: barely forward and up — the rock lands
+     a couple of metres ahead; moving adds a little momentum */
+  const v0 = 2.5 + Math.max(0, vel) * 0.3;
+  /* 'ghost': for the first instants the rock is NOT an obstacle for
+     the rover — it spawns right at the hands, inside the rover's own
+     collision circle, and would otherwise shove the rover backwards
+     the moment it is released */
+  mesh.userData.ghost = true;
+  flyingRocks.push({mesh, age: 0,
+    vx: -Math.sin(heading) * v0,
+    vy: 1.8,
+    vz: -Math.cos(heading) * v0});
+}
+
+/* one physics step for every airborne/rolling rock, called each frame */
+function updateFlyingRocks(dt){
+  for(let i = flyingRocks.length - 1; i >= 0; i--){
+    const f = flyingRocks[i], m = f.mesh, R = m.userData.radius;
+
+    /* the ghost phase ends shortly after launch: from then on the
+       rover collides with the rock like with any other boulder */
+    f.age += dt;
+    if(f.age > 0.6) m.userData.ghost = false;
+
+    /* ballistic integration: gravity pulls, position follows velocity */
+    f.vy -= MARS_G * dt;
+    m.position.x += f.vx * dt;
+    m.position.y += f.vy * dt;
+    m.position.z += f.vz * dt;
+
+    /* ground contact: clamp to the terrain; a hard landing bounces a
+       little, a soft one transitions into rolling.
+       NOTE the rest height: a MOVING rock sits on TOP of the ground
+       (~ its half-height, R*0.55), unlike the spawned rocks which are
+       deliberately sunk a little to look planted — a rolling stone
+       half-buried in the soil would look wrong */
+    const gy = terrainH(m.position.x, m.position.z) + R * 0.55;
+    let grounded = false;
+    if(m.position.y <= gy){
+      m.position.y = gy;
+      grounded = true;
+      if(f.vy < -1.2){ f.vy = -f.vy * 0.35; f.vx *= 0.7; f.vz *= 0.7; }
+      else f.vy = 0;
+    }
+    /* GLUE: rolling downhill, the ground drops away faster than gravity
+       pulls the rock down — without this snap the rock spends half the
+       time in micro-hops, the slope can only push it intermittently
+       and the roll drags on forever */
+    else if(m.position.y - gy < 0.3 && f.vy <= 0){
+      m.position.y = gy; f.vy = 0; grounded = true;
+    }
+
+    /* against another boulder: push out of the overlap and kill the
+       horizontal motion — the rock stops where it hit */
+    let blocked = false;
+    for(const o of obstacles()){
+      if(o === m || !o.userData.big) continue;
+      const dx = m.position.x - o.position.x, dz = m.position.z - o.position.z;
+      const rr = (R + o.userData.radius) * 0.8;
+      const d2 = dx*dx + dz*dz;
+      if(d2 < rr*rr){
+        const d = Math.sqrt(d2) || 1e-6;
+        m.position.x = o.position.x + dx/d * rr;
+        m.position.z = o.position.z + dz/d * rr;
+        f.vx = 0; f.vz = 0;
+        blocked = true;
+        break;
+      }
+    }
+
+    if(grounded && f.vy === 0){
+      /* ROLLING: the terrain gradient (computed by finite differences,
+         like terrainNormal) accelerates the rock downhill; friction
+         brakes it. Inside a crater bowl the rock rolls down the wall,
+         crosses the bottom, climbs a little, comes back — and the
+         oscillation dies out exactly at the LOWEST point. */
+      const e = 0.5, x = m.position.x, z = m.position.z;
+      const gx = (terrainH(x+e, z) - terrainH(x-e, z)) / (2*e);
+      const gz = (terrainH(x, z+e) - terrainH(x, z-e)) / (2*e);
+      if(!blocked){
+        f.vx -= gx * MARS_G * 2.5 * dt;
+        f.vz -= gz * MARS_G * 2.5 * dt;
+      }
+      /* COULOMB friction: a CONSTANT braking deceleration, like real
+         dry friction — unlike viscous friction (v *= factor) it brings
+         the rock to a full stop BY ITSELF, exactly where the slope is
+         no longer steep enough to push it: a few seconds on open
+         ground, the bottom of the bowl inside a crater */
+      const sp2 = Math.hypot(f.vx, f.vz);
+      const brake = 0.35 * MARS_G * dt;
+      if(sp2 <= brake){                           // friction wins: at rest
+        m.userData.ghost = false;                 // fully solid again
+        movedRocks.set(m.userData.id, {x, z});    // bookkeeping
+        placedRocks.push(m);                      // obstacle again
+        flyingRocks.splice(i, 1);
+        continue;
+      }
+      f.vx -= f.vx / sp2 * brake;                 // brake against the motion
+      f.vz -= f.vz / sp2 * brake;
+      m.position.y = terrainH(x, z) + R * 0.55;   // hug the slope, on TOP of it
+    }
+
+    /* visual spin: rotate around the horizontal axis PERPENDICULAR to
+       the motion, by (distance / radius) — like a real rolling stone */
+    const sp = Math.hypot(f.vx, f.vz);
+    if(sp > 0.01){
+      _rollAxis.set(f.vz / sp, 0, -f.vx / sp);
+      m.rotateOnWorldAxis(_rollAxis, sp * dt / Math.max(R, 0.1));
+    }
+  }
 }
 
 /* =====================================================================
@@ -747,6 +881,7 @@ addEventListener('keydown', e => {
   if(e.code === 'KeyM') toggleMusic();           // soundtrack on/off
   if(e.code === 'KeyP') grabRock();              // stretch the arms and grab
   if(e.code === 'KeyO') dropRock();              // set the boulder down
+  if(e.code === 'KeyT') throwRock();             // hurl it forward
   if(e.code === 'KeyR'){ px = 0; pz = 0; heading = 0; vel = 0; eyePitch = 0; eyeYaw = 0; }
 });
 addEventListener('keyup', e => keys[e.code] = false);
@@ -797,6 +932,7 @@ function animate(){
      you cannot collide with what you are carrying. */
   for(const mesh of obstacles()){
     if(mesh === carried) continue;
+    if(mesh.userData.ghost) continue;   // just-thrown rock, still leaving the hands
     const R = mesh.userData.radius;
     const dx = px - mesh.position.x, dz = pz - mesh.position.z;
     const d2 = dx*dx + dz*dz;
@@ -863,6 +999,7 @@ function animate(){
      the "hands" position IN CHASSIS SPACE (it is a chassis child now,
      so a simple local lerp is all it takes) */
   reach += ((carried ? 1 : 0) - reach) * Math.min(dt * 4, 1);
+  updateFlyingRocks(dt);               // thrown rocks fly, roll and settle
   if(carried){
     const R = carried.userData.radius;
     carried.position.lerp(
