@@ -322,7 +322,11 @@ function updateRocks(cx, cz){
     for(let j = cj - ROCK_RANGE; j <= cj + ROCK_RANGE; j++)
       for(const sp of rockSpecs(i, j)){
         const id = i + '_' + j + '_' + sp.k;
-        if(movedRocks.get(id) === null) continue;      // picked up, not dropped yet
+        /* any rock the rover ever touched with its arms (grabbed or
+           re-placed) has left the procedural world: it is tracked by
+           carried/placedRocks instead, so the generator must NEVER
+           spawn it again at its birth place */
+        if(movedRocks.has(id)) continue;
         if(Math.hypot(sp.x, sp.z) < 3) continue;       // keep the spawn point clear
         wanted.add(id);
         if(activeRocks.has(id)) continue;              // already in the scene
@@ -332,9 +336,8 @@ function updateRocks(cx, cz){
         /* squashed on Y + random yaw + slightly sunk = sits naturally */
         mesh.scale.set(sp.s, sp.s * (0.55 + h2 * 0.3), sp.s);
         mesh.rotation.set(0, h1 * Math.PI * 2, 0);
-        const pos = movedRocks.get(id) || sp;          // future: moved rocks re-placed
-        mesh.position.set(pos.x, terrainH(pos.x, pos.z) + sp.s * 0.18, pos.z);
-        mesh.userData = {id, big: sp.big, radius: sp.s};  // hooks for the pickup
+        mesh.position.set(sp.x, terrainH(sp.x, sp.z) + sp.s * 0.18, sp.z);
+        mesh.userData = {id, big: sp.big, radius: sp.s};
         rockGroup.add(mesh);
         activeRocks.set(id, mesh);
       }
@@ -343,6 +346,64 @@ function updateRocks(cx, cz){
     if(!wanted.has(id)){
       rockGroup.remove(mesh); rockPool.push(mesh); activeRocks.delete(id);
     }
+}
+
+/* =====================================================================
+   ROCK CARRYING (keys P / O) — the rover moves boulders around.
+   P: if a big boulder sits right in front, the arms STRETCH out and
+      grab it. The rock mesh is re-parented INTO THE CHASSIS with
+      .attach() — the hierarchy at work again: as a child of the
+      chassis it follows every movement, bounce and tilt of the rover
+      for free, no per-frame math needed. While carried it stops
+      being an obstacle.
+   O: the boulder is set down on the terrain just beyond the rover's
+      front and becomes a normal obstacle again.
+   Bookkeeping: a touched rock leaves the procedural world forever
+   (movedRocks marks its id, so updateRocks won't respawn it) and,
+   once released, lives in placedRocks — a permanent list checked by
+   the collision loop together with the procedural rocks.
+   ===================================================================== */
+const placedRocks = [];                        // boulders the rover re-placed
+function* obstacles(){ yield* activeRocks.values(); yield* placedRocks; }
+
+function grabRock(){
+  if(carried) return;                          // hands already full
+  const fx = -Math.sin(heading), fz = -Math.cos(heading);   // forward direction
+  let best = null, bestD = Infinity;
+  for(const mesh of obstacles()){
+    if(!mesh.userData.big) continue;           // only boulders need the arms
+    const dx = mesh.position.x - px, dz = mesh.position.z - pz;
+    const d = Math.hypot(dx, dz);
+    const reachDist = mesh.userData.radius * 0.85 + 1.0 + 1.8; // contact + arms
+    /* must be within reach AND roughly in FRONT of the rover:
+       the dot product with the forward direction filters by angle */
+    if(d < reachDist && (dx*fx + dz*fz) / (d || 1) > 0.5 && d < bestD){
+      best = mesh; bestD = d;
+    }
+  }
+  if(!best) return;                            // nothing in front to take
+  /* remove it from whichever collection it currently lives in */
+  activeRocks.delete(best.userData.id);
+  const k = placedRocks.indexOf(best);
+  if(k >= 0) placedRocks.splice(k, 1);
+  movedRocks.set(best.userData.id, null);      // generator: never respawn it
+  chassis.attach(best);   // new parent, world position preserved (no jump)
+  carried = best;         // the loop eases it into the hands from here
+}
+
+function dropRock(){
+  if(!carried) return;
+  rockGroup.attach(carried);                   // back to world space, no jump
+  /* set it down on the ground just beyond the rover's front, outside
+     the collision circle so the rover isn't instantly pushed back */
+  const R = carried.userData.radius;
+  const d = R * 0.85 + 1.0 + 0.4;
+  const x = px - Math.sin(heading) * d, z = pz - Math.cos(heading) * d;
+  carried.position.set(x, terrainH(x, z) + R * 0.18, z);
+  carried.rotation.x = 0; carried.rotation.z = 0;   // lies flat again
+  movedRocks.set(carried.userData.id, {x, z});      // bookkeeping
+  placedRocks.push(carried);                        // permanent obstacle now
+  carried = null;                                   // arms retract in the loop
 }
 
 /* =====================================================================
@@ -604,6 +665,8 @@ let eyeYaw = 0;        // head pan (left/right) controlled with keys 9/0
 let bump = 0;          // 1 right after driving over a small rock, fades to 0
 let eyeView = false;   // C: false = chase camera, true = rover's eyes
 let lightsOn = true;   // L: headlights on/off
+let carried = null;    // the boulder mesh currently in the hands (or null)
+let reach = 0;         // arm extension 0..1, eased every frame
 
 /* =====================================================================
    MUSIC (key M) — browsers only allow audio AFTER a user gesture, so
@@ -682,6 +745,8 @@ addEventListener('keydown', e => {
   if(e.code === 'KeyC') eyeView = !eyeView;      // switch viewpoint
   if(e.code === 'KeyL') lightsOn = !lightsOn;    // toggle headlights
   if(e.code === 'KeyM') toggleMusic();           // soundtrack on/off
+  if(e.code === 'KeyP') grabRock();              // stretch the arms and grab
+  if(e.code === 'KeyO') dropRock();              // set the boulder down
   if(e.code === 'KeyR'){ px = 0; pz = 0; heading = 0; vel = 0; eyePitch = 0; eyeYaw = 0; }
 });
 addEventListener('keyup', e => keys[e.code] = false);
@@ -727,10 +792,11 @@ function animate(){
        bigger jolt.
      - BIG boulders always stop the rover.
      Only the ~270 nearby rock meshes are checked, so the cost is
-     negligible.
-     (Later, the pickup feature can reuse this same loop to detect
-     "rover is touching rock X".) */
-  for(const mesh of activeRocks.values()){
+     negligible. obstacles() also yields the boulders the rover has
+     re-placed by hand; the one currently IN the hands is skipped —
+     you cannot collide with what you are carrying. */
+  for(const mesh of obstacles()){
+    if(mesh === carried) continue;
     const R = mesh.userData.radius;
     const dx = px - mesh.position.x, dz = pz - mesh.position.z;
     const d2 = dx*dx + dz*dz;
@@ -792,12 +858,30 @@ function animate(){
   if(keys['Digit0']) eyeYaw = Math.max(-0.9, eyeYaw - dt*1.6);
   head.rotation.y = eyeYaw;
 
+  /* --- rock carrying: the arm extension eases toward 1 while a rock
+     is held, back to 0 after the drop; the boulder itself glides into
+     the "hands" position IN CHASSIS SPACE (it is a chassis child now,
+     so a simple local lerp is all it takes) */
+  reach += ((carried ? 1 : 0) - reach) * Math.min(dt * 4, 1);
+  if(carried){
+    const R = carried.userData.radius;
+    carried.position.lerp(
+      new THREE.Vector3(0, 0.1 + R * 0.3, -(1.05 + R * 0.8)),
+      Math.min(dt * 5, 1));
+  }
+
   /* arms sway more when driving faster; beacon blinks; body bounces
-     slightly (only the chassis: treads stay on the ground) */
+     slightly (only the chassis: treads stay on the ground).
+     While grabbing, the sway fades out and the arms REACH forward and
+     STRETCH (scaling the shoulder group stretches the whole limb —
+     hierarchy again) */
   const sp = Math.abs(vel);
-  arms.forEach((a, i) =>
-    a.rotation.x = Math.sin(t*3 + i*Math.PI) * 0.05 * Math.min(sp, 3)
-                 + Math.sin(t*0.8 + i) * 0.03);
+  arms.forEach((a, i) => {
+    const sway = Math.sin(t*3 + i*Math.PI) * 0.05 * Math.min(sp, 3)
+               + Math.sin(t*0.8 + i) * 0.03;
+    a.rotation.x = sway * (1 - reach) - 0.3 * reach;
+    a.scale.z = 1 + 1.1 * reach;
+  });
   /* the small-rock jolt: fast vertical rattle + a hint of roll on the
      chassis while 'bump' fades — reads as the treads climbing a stone */
   chassis.position.y = 0.62 + Math.sin(t*9) * 0.006 * Math.min(sp, 4)
