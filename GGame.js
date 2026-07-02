@@ -80,6 +80,10 @@ scene.add(skyGroup);
 addEventListener('resize', () => {
   camera.aspect = innerWidth/innerHeight;
   camera.updateProjectionMatrix();
+  /* the eye camera lives further down (inside the rover's head) but is
+     hoisted-safe to touch here because resize only fires at runtime */
+  eyeCam.aspect = innerWidth/innerHeight;
+  eyeCam.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
 });
 
@@ -154,13 +158,18 @@ function terrainNormal(x, z){
 
 /* =====================================================================
    STAGE 8 (arrived early) — PROCEDURAL MARS TEXTURES.
-   Two texture KINDS on the same material (a project requirement):
-   - a COLOR map:  rust base + darker/lighter mineral patches + pebbles
-   - a BUMP map:   grayscale height detail; the lighting reacts as if
-                   the surface were rough, without adding any geometry
-   Both are drawn on 2D canvases (like the license plate) so the repo
-   needs no image files. Blobs are stamped at 9 wrapped positions so
-   the texture TILES seamlessly with RepeatWrapping.
+   THREE texture KINDS (the requirement says "textures of different
+   kinds (color, normal, specular, …)"):
+   - a COLOR map   on the ground: rust base + tone patches + pebbles
+   - a NORMAL map  on the ground: computed from the height canvas,
+                   RGB-encoded tangent-space normals — the lighting
+                   reacts to fake detail without adding any geometry
+   - a BUMP map    on the rocks: grayscale height detail
+   (Three.js ignores bumpMap when normalMap is present on the SAME
+   material, which is why the two kinds live on different objects.)
+   Everything is drawn on 2D canvases (like the license plate) so the
+   repo needs no image files. Blobs are stamped at 9 wrapped positions
+   so the textures TILE seamlessly with RepeatWrapping.
    ===================================================================== */
 const TILE = 25;                     // one texture copy covers 25 m of ground
 function makeMarsTextures(){
@@ -198,13 +207,41 @@ function makeMarsTextures(){
     bctx.fillStyle = 'rgba(255,255,255,' + (0.25 + v*0.35) + ')';
     bctx.fillRect(x, y, s, s);
   }
-  const map = new THREE.CanvasTexture(cv), bump = new THREE.CanvasTexture(bcv);
-  for(const t of [map, bump]){
+  /* NORMAL MAP — derived from the height (bump) canvas: each pixel's
+     slope toward its neighbours becomes a tangent-space normal vector,
+     encoded as RGB (this is what "normal map generator" tools do).
+     Neighbours wrap around the canvas edges, so the result still tiles. */
+  const bd = bctx.getImageData(0, 0, W, W).data;
+  const ncv = document.createElement('canvas'); ncv.width = ncv.height = W;
+  const nctx = ncv.getContext('2d');
+  const nimg = nctx.createImageData(W, W);
+  const hAt = (x, y) => bd[(((y + W) % W) * W + ((x + W) % W)) * 4]; // red = height
+  const STR = 2.4;                     // how strong the fake relief reads
+  for(let y = 0; y < W; y++)
+    for(let x = 0; x < W; x++){
+      const sx = (hAt(x+1, y) - hAt(x-1, y)) / 255 * STR;
+      const sy = (hAt(x, y+1) - hAt(x, y-1)) / 255 * STR;
+      const inv = 1 / Math.sqrt(sx*sx + sy*sy + 1); // normalize (x,y,z=1)
+      const o = (y * W + x) * 4;
+      nimg.data[o]     = (-sx * inv * 0.5 + 0.5) * 255;  // X -> red
+      nimg.data[o + 1] = ( sy * inv * 0.5 + 0.5) * 255;  // Y -> green
+      nimg.data[o + 2] = (      inv * 0.5 + 0.5) * 255;  // Z -> blue
+      nimg.data[o + 3] = 255;
+    }
+  nctx.putImageData(nimg, 0, 0);
+
+  const map = new THREE.CanvasTexture(cv), normal = new THREE.CanvasTexture(ncv);
+  for(const t of [map, normal]){
     t.wrapS = t.wrapT = THREE.RepeatWrapping;
     t.repeat.set(SIZE/TILE, SIZE/TILE);
     t.anisotropy = renderer.capabilities.getMaxAnisotropy(); // sharp at grazing angles
   }
-  return {map, bump};
+  /* the height canvas becomes the BUMP map for the rocks (their own
+     texture object: rock UVs must not follow the ground's offsets) */
+  const rockBump = new THREE.CanvasTexture(bcv);
+  rockBump.wrapS = rockBump.wrapT = THREE.RepeatWrapping;
+  rockBump.repeat.set(3, 3);
+  return {map, normal, rockBump};
 }
 
 /* build the ground patch: PlaneGeometry is vertical by default, so we
@@ -221,10 +258,10 @@ const marsTex = makeMarsTextures();
 const colAttr = new THREE.BufferAttribute(new Float32Array(posAttr.count * 3).fill(1), 3);
 groundGeo.setAttribute('color', colAttr);
 const groundMat = new THREE.MeshStandardMaterial({
-  map: marsTex.map,          // color texture
-  bumpMap: marsTex.bump,     // bump texture (second kind)
-  bumpScale: 0.4,
-  vertexColors: true,        // crater shading
+  map: marsTex.map,            // color texture (kind 1)
+  normalMap: marsTex.normal,   // normal texture (kind 2)
+  normalScale: new THREE.Vector2(0.9, 0.9),
+  vertexColors: true,          // crater shading
   roughness: 0.97
 });
 const ground = new THREE.Mesh(groundGeo, groundMat);
@@ -249,9 +286,12 @@ scene.add(rockGroup);
 const ROCK_CELL  = 16;   // one virtual cell may hold up to 1 big + 2 small rocks
 const ROCK_RANGE = 7;    // rocks exist within ±7 cells (~112 m) of the rover
 
-/* darker red than the #93502a soil — three variants for variety */
+/* darker red than the #93502a soil — three variants for variety.
+   The rocks carry the BUMP texture (third texture kind): grayscale
+   height detail that roughens their lighting. */
 const rockMats = [0x6b2115, 0x7a2a1a, 0x581b10].map(c =>
-  new THREE.MeshStandardMaterial({color: c, roughness: 0.92, metalness: 0.05}));
+  new THREE.MeshStandardMaterial({color: c, roughness: 0.92, metalness: 0.05,
+                                  bumpMap: marsTex.rockBump, bumpScale: 0.25}));
 const rockGeo = new THREE.DodecahedronGeometry(1, 0);   // low-poly boulder shape
 
 const movedRocks = new Map();   // future pickup feature writes here
@@ -343,9 +383,9 @@ function updateGround(x, z){
   colAttr.needsUpdate = true;
   groundGeo.computeVertexNormals();                // recompute lighting
   groundGeo.attributes.normal.needsUpdate = true;
-  /* cancel the patch offset in UV space -> texture stays glued to the world */
+  /* cancel the patch offset in UV space -> textures stay glued to the world */
   marsTex.map.offset.set(cx / TILE, -cz / TILE);
-  marsTex.bump.offset.set(cx / TILE, -cz / TILE);
+  marsTex.normal.offset.set(cx / TILE, -cz / TILE);
   /* rocks near the new centre appear, far ones are recycled */
   updateRocks(cx, cz);
 }
@@ -478,8 +518,14 @@ for(const sx of [-1, 1]){              // two binocular eye pods
   iris.position.z = -0.185;
   eye.add(iris);
 }
-/* in stage 6, a THREE.PerspectiveCamera gets added inside each eye group
-   exactly like the lens — cameras are scene-graph nodes too */
+/* --- the EYES camera (key C): a camera is a scene-graph node exactly
+       like a mesh, so parking it inside the 'head' group means it
+       inherits the FULL hierarchy chain (rover > chassis > neckBase >
+       head): it drives with the rover, tilts with the terrain, and
+       pans/tilts with keys 1/2/9/0 — first-person from the eyes. */
+const eyeCam = new THREE.PerspectiveCamera(75, innerWidth/innerHeight, 0.05, 500);
+eyeCam.position.set(0, 0.15, -0.2);    // just above, between the two eye pods
+head.add(eyeCam);
 
 /* --- rear license plate with "GGame".
        Text in 3D is done by DRAWING on a 2D canvas and using it as a
@@ -507,6 +553,32 @@ for(const sx of [-1, 1]){              // two binocular eye pods
   chassis.add(plate);
 }
 
+/* --- headlights: two SpotLights at the front of the chassis.
+       A SpotLight shines from its position toward a TARGET object;
+       lamp, light and target are ALL children of the chassis, so the
+       light cones follow every movement and tilt of the rover
+       automatically — hierarchy again. Key L toggles them. --- */
+const headlights = [];
+for(const sx of [-1, 1]){
+  /* the visible lamp: a small emissive cylinder set into the front */
+  const lamp = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.09, 0.06, 12),
+    new THREE.MeshStandardMaterial({color: 0xfff6d8, emissive: 0xffe9b0,
+                                    emissiveIntensity: 1}));
+  lamp.rotation.x = Math.PI/2;           // cylinder face points forward
+  lamp.position.set(sx*0.45, 0.28, -0.71);
+  chassis.add(lamp);
+  /* the actual light: aims forward and slightly DOWN, so the cone
+     lands on the ground a few metres ahead of the rover */
+  const spot = new THREE.SpotLight(0xffe9c0, 1.6, 45, 0.55, 0.45);
+  spot.position.copy(lamp.position);
+  const tgt = new THREE.Object3D();
+  tgt.position.set(sx*0.45, -1.2, -9);
+  chassis.add(tgt);
+  spot.target = tgt;
+  chassis.add(spot);
+  headlights.push({spot, lamp});
+}
+
 /* --- antenna + blinking beacon --- */
 const antenna = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.02, 0.5, 6), steelMat);
 antenna.position.set(0.55, 0.75, 0.4);
@@ -530,10 +602,86 @@ let vel = 0;           // signed speed (negative = reverse)
 let eyePitch = 0;      // head tilt controlled with keys 1/2
 let eyeYaw = 0;        // head pan (left/right) controlled with keys 9/0
 let bump = 0;          // 1 right after driving over a small rock, fades to 0
+let eyeView = false;   // C: false = chase camera, true = rover's eyes
+let lightsOn = true;   // L: headlights on/off
+
+/* =====================================================================
+   MUSIC (key M) — browsers only allow audio AFTER a user gesture, so
+   everything is created lazily on the first M press.
+   Plan A: loop 'soundtrack.mp3' if such a file sits next to index.html
+           (use a track you have the rights to — the real Star Trek
+           theme is copyrighted, don't commit it to a public repo).
+   Plan B: if the file is missing, synthesize an ORIGINAL space-ambient
+           pad live with the Web Audio API: a slow-breathing chord of
+           detuned oscillators through a lowpass filter — no imported
+           assets, everything generated in code.
+   ===================================================================== */
+let musicOn = false, musicFile = null, synth = null;
+function makeSynthPad(){
+  const ac = new (window.AudioContext || window.webkitAudioContext)();
+  const master = ac.createGain(); master.gain.value = 0;      // faded in below
+  const filter = ac.createBiquadFilter();
+  filter.type = 'lowpass'; filter.frequency.value = 900; filter.Q.value = 0.6;
+  filter.connect(master); master.connect(ac.destination);
+  /* a wide, quiet chord (A2, E3, A3, C#4, E4) with slight detune between
+     voices = the classic slow "space pad" sound */
+  for(const [f, det] of [[110,0],[164.8,3],[220,-4],[277.2,2],[329.6,-3]]){
+    const o = ac.createOscillator();
+    o.type = 'sawtooth'; o.frequency.value = f; o.detune.value = det;
+    const g = ac.createGain(); g.gain.value = 0.05;
+    /* each voice breathes at its own very slow rate */
+    const lfo = ac.createOscillator(), lg = ac.createGain();
+    lfo.frequency.value = 0.05 + Math.random() * 0.08; lg.gain.value = 0.03;
+    lfo.connect(lg); lg.connect(g.gain);
+    o.connect(g); g.connect(filter);
+    o.start(); lfo.start();
+  }
+  master.gain.linearRampToValueAtTime(1, ac.currentTime + 4); // slow fade-in
+  return {ac, master};
+}
+function toggleMusic(){
+  musicOn = !musicOn;
+  if(musicOn){
+    if(!musicFile && !synth){
+      musicFile = new Audio('soundtrack.mp3');   // plan A
+      musicFile.loop = true; musicFile.volume = 0.55;
+      musicFile.play().catch(() => {             // no file -> plan B
+        musicFile = null;
+        synth = makeSynthPad();
+      });
+    }
+    else if(musicFile) musicFile.play();
+    else synth.ac.resume();
+  } else {
+    if(musicFile) musicFile.pause();
+    if(synth) synth.ac.suspend();
+  }
+}
+
+/* =====================================================================
+   START SCREEN — the Mars scene renders live behind the translucent
+   menu; PLAY removes it and unlocks the keyboard. The MUSIC button is
+   a click = a valid user gesture, so the browser lets audio start
+   right from the menu.
+   ===================================================================== */
+let started = false;
+document.getElementById('playBtn').addEventListener('click', () => {
+  started = true;
+  document.getElementById('menu').style.display = 'none';
+});
+document.getElementById('musicBtn').addEventListener('click', e => {
+  toggleMusic();
+  /* no text on the button: the note glyph glows when music is on */
+  e.target.classList.toggle('on', musicOn);
+});
 
 const keys = {};
 addEventListener('keydown', e => {
+  if(!started) return;                 // keyboard is locked on the menu
   keys[e.code] = true;
+  if(e.code === 'KeyC') eyeView = !eyeView;      // switch viewpoint
+  if(e.code === 'KeyL') lightsOn = !lightsOn;    // toggle headlights
+  if(e.code === 'KeyM') toggleMusic();           // soundtrack on/off
   if(e.code === 'KeyR'){ px = 0; pz = 0; heading = 0; vel = 0; eyePitch = 0; eyeYaw = 0; }
 });
 addEventListener('keyup', e => keys[e.code] = false);
@@ -572,20 +720,23 @@ function animate(){
      the rover is pushed back OUT to the contact edge and stopped —
      it hits the rock and can't go further, but steering lets it
      slide around the obstacle.
-     EXCEPTION: very small rocks (radius < 0.3 m) don't block — the
-     treads climb OVER them; driving over one triggers a short jolt
-     (the 'bump' variable) that shakes the chassis, and eats a bit
-     of speed. Only the ~270 nearby rock meshes are checked, so the
-     cost is negligible.
+     TWO CLASSES, two behaviours (the 'big' flag set at spawn time):
+     - SMALL rocks never block: the treads climb OVER them; driving
+       over one triggers a short jolt (the 'bump' variable) that
+       shakes the chassis and eats a bit of speed — bigger stone,
+       bigger jolt.
+     - BIG boulders always stop the rover.
+     Only the ~270 nearby rock meshes are checked, so the cost is
+     negligible.
      (Later, the pickup feature can reuse this same loop to detect
      "rover is touching rock X".) */
   for(const mesh of activeRocks.values()){
     const R = mesh.userData.radius;
     const dx = px - mesh.position.x, dz = pz - mesh.position.z;
     const d2 = dx*dx + dz*dz;
-    if(R < 0.3){                                   // small: crossable
+    if(!mesh.userData.big){                        // small: always crossable
       if(d2 < (R + 0.9)**2 && Math.abs(vel) > 0.3){
-        bump = 1;                                  // start the jolt
+        bump = Math.min(1, 0.4 + R * 1.6);         // jolt scales with the stone
         vel *= 1 - 1.2 * dt;                       // the stone steals some speed
       }
       continue;
@@ -654,6 +805,13 @@ function animate(){
   chassis.rotation.z = bump * Math.sin(t*33) * 0.04;
   beacon.material.color.setHex((t % 1.2) < 0.15 ? 0xff8877 : 0x661a11);
 
+  /* headlights: the L key flips 'lightsOn'; the lamps stay softly lit
+     when off so the rover front doesn't look broken */
+  for(const h of headlights){
+    h.spot.visible = lightsOn;
+    h.lamp.material.emissiveIntensity = lightsOn ? 1 : 0.06;
+  }
+
   /* --- chase camera: a point behind the rover, smoothed with lerp --- */
   const cx = px + Math.sin(heading) * 7;
   const cz = pz + Math.cos(heading) * 7;
@@ -663,8 +821,11 @@ function animate(){
 
   /* --- HUD --- */
   document.getElementById('info').textContent =
-    'pos ' + px.toFixed(0) + ', ' + pz.toFixed(0);
+    'pos ' + px.toFixed(0) + ', ' + pz.toFixed(0) +
+    (eyeView ? '  ·  EYE VIEW' : '');
 
-  renderer.render(scene, camera);
+  /* C switches which camera renders: the chase camera keeps lerping in
+     the background, so switching back is seamless */
+  renderer.render(scene, eyeView ? eyeCam : camera);
 }
 animate();
