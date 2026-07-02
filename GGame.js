@@ -10,7 +10,7 @@
      5 - tread scrolling, dust, more animations
      6 - the two eye cameras with picture-in-picture feeds
      7 - sky dome, stars, the whole solar system
-     8 - textures/normal maps, headlights, HUD polish
+     8 - headlights, HUD polish (ground color+bump textures: done)
 
    'THREE' is the global created by three.min.js, loaded before this
    file in index.html.
@@ -24,6 +24,9 @@
 /* 1. RENDERER — draws onto a <canvas> using WebGL */
 const renderer = new THREE.WebGLRenderer({antialias: true});
 renderer.setSize(innerWidth, innerHeight);
+/* no shadow mapping: the dark inside of the craters is BAKED into the
+   terrain's vertex colors instead (see updateGround) — cheaper and it
+   reads better on an open landscape */
 document.body.appendChild(renderer.domElement);
 
 /* 2. SCENE — the container of everything */
@@ -39,8 +42,9 @@ const camera = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 0.1, 500)
    DirectionalLight = parallel rays like the sun;
    AmbientLight = base fill so shadowed sides aren't pure black. */
 const sun = new THREE.DirectionalLight(0xfff1dd, 1.2);
-sun.position.set(60, 80, 40);          // direction = position -> origin
+sun.position.set(60, 80, 40);          // direction = position -> target
 scene.add(sun);
+scene.add(sun.target);                 // target must be in the scene to move it
 scene.add(new THREE.AmbientLight(0x886655, 0.55));
 
 /* =====================================================================
@@ -87,26 +91,265 @@ addEventListener('resize', () => {
    everywhere, the world is conceptually infinite — we only draw a patch.
    Sums of sines at different frequencies look like natural dunes.
    ===================================================================== */
-function terrainH(x, z){
+/* deterministic pseudo-random number from a grid cell: same inputs ->
+   same output, so craters never move between frames or reloads */
+function hash(a, b, s){
+  const h = Math.sin(a*127.1 + b*311.7 + s*74.7) * 43758.5453;
+  return h - Math.floor(h);
+}
+/* classic Mars crater profile: a smooth bowl plus a raised rim.
+   d = distance from the crater centre, R = radius, depth = bowl depth */
+function craterShape(d, R, depth){
+  const x = d / R;
+  if(x > 1.4) return 0;
+  const bowl = x < 1 ? -depth * (1 - x*x) * (1 - x*x) : 0;           // the hole
+  const rim  = depth * 0.22 * Math.exp(-((x - 1.05)**2) / 0.015);    // the edge bump
+  return bowl + rim;
+}
+/* craters live on a virtual grid: each cell MAY contain one, with
+   hashed centre, radius and depth. Any point only needs to check its
+   own cell and the 8 neighbours. The SAME function shapes the mesh
+   and drives the rover, so the rover really goes down into the holes.
+   TWO layers on different grids give craters of very different sizes:
+   - 70 m cells -> rare BIG craters the rover can drive down into
+   - 26 m cells -> frequent small pockmarks
+   depth grows with the radius, like real impact craters. */
+function craterLayer(x, z, cell, s, Rmin, Rmax, dScale){
+  let h = 0;
+  const cx = Math.floor(x / cell), cz = Math.floor(z / cell);
+  for(let i = cx-1; i <= cx+1; i++)
+    for(let j = cz-1; j <= cz+1; j++){
+      if(hash(i, j, s) < 0.45) continue;              // no crater in this cell
+      const ox = i*cell + hash(i, j, s+1) * cell;     // crater centre
+      const oz = j*cell + hash(i, j, s+2) * cell;
+      const R     = Rmin + hash(i, j, s+3) * (Rmax - Rmin);
+      const depth = R * dScale * (0.7 + hash(i, j, s+4) * 0.6);
+      h += craterShape(Math.hypot(x - ox, z - oz), R, depth);
+    }
+  return h;
+}
+function cratersAt(x, z){
+  return craterLayer(x, z, 70, 1,  6,   26,  0.18)    // big: R 6..26 m, up to ~6 m deep
+       + craterLayer(x, z, 26, 11, 1.6, 4.5, 0.22);   // small pockmarks
+}
+/* rolling dunes WITHOUT the craters — split out so the shading pass can
+   ask for the crater contribution separately */
+function baseH(x, z){
   return Math.sin(x*0.021 + 1.7) * Math.cos(z*0.017) * 4.2   // large hills
        + Math.sin(x*0.052) * Math.cos(z*0.047 + 0.8) * 1.6   // medium dunes
        + Math.sin(x*0.19)  * Math.sin(z*0.16) * 0.22;        // small bumps
+}
+function terrainH(x, z){
+  return baseH(x, z) + cratersAt(x, z);
+}
+/* terrain normal by finite differences: sample the height a little to
+   each side and build the perpendicular. Used to tilt the rover. */
+function terrainNormal(x, z){
+  const e = 0.6;
+  return new THREE.Vector3(
+    terrainH(x-e, z) - terrainH(x+e, z),
+    2*e,
+    terrainH(x, z-e) - terrainH(x, z+e)).normalize();
+}
+
+/* =====================================================================
+   STAGE 8 (arrived early) — PROCEDURAL MARS TEXTURES.
+   Two texture KINDS on the same material (a project requirement):
+   - a COLOR map:  rust base + darker/lighter mineral patches + pebbles
+   - a BUMP map:   grayscale height detail; the lighting reacts as if
+                   the surface were rough, without adding any geometry
+   Both are drawn on 2D canvases (like the license plate) so the repo
+   needs no image files. Blobs are stamped at 9 wrapped positions so
+   the texture TILES seamlessly with RepeatWrapping.
+   ===================================================================== */
+const TILE = 25;                     // one texture copy covers 25 m of ground
+function makeMarsTextures(){
+  const W = 1024;
+  const cv  = document.createElement('canvas'); cv.width  = cv.height  = W;
+  const bcv = document.createElement('canvas'); bcv.width = bcv.height = W;
+  const ctx = cv.getContext('2d'), bctx = bcv.getContext('2d');
+  ctx.fillStyle  = '#93502a'; ctx.fillRect(0, 0, W, W);    // base rust
+  bctx.fillStyle = '#808080'; bctx.fillRect(0, 0, W, W);   // bump: mid-gray = flat
+
+  /* soft round patch, repeated at the 8 wrapped offsets => tileable */
+  function blob(c, x, y, r, rgba){
+    for(const ox of [-W, 0, W]) for(const oy of [-W, 0, W]){
+      const g = c.createRadialGradient(x+ox, y+oy, 0, x+ox, y+oy, r);
+      g.addColorStop(0, rgba); g.addColorStop(1, 'rgba(0,0,0,0)');
+      c.fillStyle = g;
+      c.beginPath(); c.arc(x+ox, y+oy, r, 0, Math.PI*2); c.fill();
+    }
+  }
+  /* gentle tone variation: rust hues CLOSE to the base color, so the
+     ground doesn't look uniform but nothing reads as a shadow — the
+     only dark areas on the map must be the crater bowls */
+  for(let i = 0; i < 70; i++){
+    const x = Math.random()*W, y = Math.random()*W, r = 40 + Math.random()*160;
+    const warm = Math.random() < 0.5;
+    blob(ctx,  x, y, r, warm ? 'rgba(178,100,50,0.20)' : 'rgba(132,72,38,0.18)');
+    blob(bctx, x, y, r, warm ? 'rgba(150,150,150,0.15)' : 'rgba(110,110,110,0.12)');
+  }
+  /* thousands of pebbles: bright in the bump map so they poke UP */
+  for(let i = 0; i < 3500; i++){
+    const x = Math.random()*(W-4), y = Math.random()*(W-4), s = 1 + Math.random()*3;
+    const v = Math.random();
+    ctx.fillStyle  = v < 0.5 ? 'rgba(52,24,12,0.55)' : 'rgba(220,150,90,0.5)';
+    ctx.fillRect(x, y, s, s);
+    bctx.fillStyle = 'rgba(255,255,255,' + (0.25 + v*0.35) + ')';
+    bctx.fillRect(x, y, s, s);
+  }
+  const map = new THREE.CanvasTexture(cv), bump = new THREE.CanvasTexture(bcv);
+  for(const t of [map, bump]){
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.repeat.set(SIZE/TILE, SIZE/TILE);
+    t.anisotropy = renderer.capabilities.getMaxAnisotropy(); // sharp at grazing angles
+  }
+  return {map, bump};
 }
 
 /* build the ground patch: PlaneGeometry is vertical by default, so we
    rotate it flat; after that, vertex Y is "up" and we can set it from
    the height function. */
-const SIZE = 300, SEGS = 100;
+const SIZE = 300, SEGS = 150;   // finer grid so crater bowls look smooth
 const groundGeo = new THREE.PlaneGeometry(SIZE, SIZE, SEGS, SEGS);
 groundGeo.rotateX(-Math.PI/2);
 const posAttr = groundGeo.attributes.position;
-for(let i = 0; i < posAttr.count; i++){
-  posAttr.setY(i, terrainH(posAttr.getX(i), posAttr.getZ(i)));
-}
-groundGeo.computeVertexNormals();      // recompute lighting after displacement
-const ground = new THREE.Mesh(groundGeo,
-  new THREE.MeshStandardMaterial({color: 0x64301a, roughness: 0.97}));  // dark Mars soil
+const marsTex = makeMarsTextures();
+/* per-vertex COLOR attribute: multiplied with the texture by the
+   material (vertexColors:true). updateGround writes darkness into it
+   inside the crater bowls — a baked ambient-occlusion effect. */
+const colAttr = new THREE.BufferAttribute(new Float32Array(posAttr.count * 3).fill(1), 3);
+groundGeo.setAttribute('color', colAttr);
+const groundMat = new THREE.MeshStandardMaterial({
+  map: marsTex.map,          // color texture
+  bumpMap: marsTex.bump,     // bump texture (second kind)
+  bumpScale: 0.4,
+  vertexColors: true,        // crater shading
+  roughness: 0.97
+});
+const ground = new THREE.Mesh(groundGeo, groundMat);
 scene.add(ground);
+
+/* =====================================================================
+   ROCKS — big boulders and small stones scattered over the whole
+   (unlimited) surface, in a DARKER RED than the soil.
+   Same trick as the craters: rocks live on a virtual grid, each cell
+   deterministically decides (via hash) if it holds rocks, where, and
+   how big. Only the rocks near the rover exist as meshes; they are
+   RECYCLED through a pool while driving, so memory stays constant.
+
+   DESIGNED FOR THE FUTURE PICKUP FEATURE: every rock mesh carries a
+   stable id + size in userData. When the rover will grab a rock, write
+   into movedRocks:  movedRocks.set(id, null)        -> rock removed
+                     movedRocks.set(id, {x:…, z:…})  -> rock re-placed
+   then force a refresh; the generator consults the map every time.
+   ===================================================================== */
+const rockGroup = new THREE.Group();
+scene.add(rockGroup);
+const ROCK_CELL  = 16;   // one virtual cell may hold up to 1 big + 2 small rocks
+const ROCK_RANGE = 7;    // rocks exist within ±7 cells (~112 m) of the rover
+
+/* darker red than the #93502a soil — three variants for variety */
+const rockMats = [0x6b2115, 0x7a2a1a, 0x581b10].map(c =>
+  new THREE.MeshStandardMaterial({color: c, roughness: 0.92, metalness: 0.05}));
+const rockGeo = new THREE.DodecahedronGeometry(1, 0);   // low-poly boulder shape
+
+const movedRocks = new Map();   // future pickup feature writes here
+
+/* deterministic list of the rocks belonging to one grid cell */
+function rockSpecs(i, j){
+  const specs = [];
+  if(hash(i, j, 60) > 0.84)                       // BIG boulder: ~1 cell in 6
+    specs.push({k: 0, big: true,
+      x: (i + hash(i, j, 61)) * ROCK_CELL,
+      z: (j + hash(i, j, 62)) * ROCK_CELL,
+      s: 0.9 + hash(i, j, 63) * 1.3});            // radius 0.9..2.2 m
+  const n = Math.floor(hash(i, j, 70) * 3);       // 0..2 SMALL rocks per cell
+  for(let k = 1; k <= n; k++)                     // (the future pickable ones)
+    specs.push({k, big: false,
+      x: (i + hash(i, j, 70 + k*3)) * ROCK_CELL,
+      z: (j + hash(i, j, 71 + k*3)) * ROCK_CELL,
+      s: 0.16 + hash(i, j, 72 + k*3) * 0.3});     // radius 0.16..0.46 m
+  return specs;
+}
+
+const activeRocks = new Map();   // id -> mesh currently in the scene
+const rockPool = [];             // spare meshes, recycled while driving
+function updateRocks(cx, cz){
+  const ci = Math.round(cx / ROCK_CELL), cj = Math.round(cz / ROCK_CELL);
+  const wanted = new Set();
+  for(let i = ci - ROCK_RANGE; i <= ci + ROCK_RANGE; i++)
+    for(let j = cj - ROCK_RANGE; j <= cj + ROCK_RANGE; j++)
+      for(const sp of rockSpecs(i, j)){
+        const id = i + '_' + j + '_' + sp.k;
+        if(movedRocks.get(id) === null) continue;      // picked up, not dropped yet
+        if(Math.hypot(sp.x, sp.z) < 3) continue;       // keep the spawn point clear
+        wanted.add(id);
+        if(activeRocks.has(id)) continue;              // already in the scene
+        const mesh = rockPool.pop() || new THREE.Mesh(rockGeo, rockMats[0]);
+        const h1 = hash(sp.x, sp.z, 80), h2 = hash(sp.x, sp.z, 81);
+        mesh.material = rockMats[Math.floor(h1 * rockMats.length) % rockMats.length];
+        /* squashed on Y + random yaw + slightly sunk = sits naturally */
+        mesh.scale.set(sp.s, sp.s * (0.55 + h2 * 0.3), sp.s);
+        mesh.rotation.set(0, h1 * Math.PI * 2, 0);
+        const pos = movedRocks.get(id) || sp;          // future: moved rocks re-placed
+        mesh.position.set(pos.x, terrainH(pos.x, pos.z) + sp.s * 0.18, pos.z);
+        mesh.userData = {id, big: sp.big, radius: sp.s};  // hooks for the pickup
+        rockGroup.add(mesh);
+        activeRocks.set(id, mesh);
+      }
+  /* rocks that fell out of range go back to the pool */
+  for(const [id, mesh] of activeRocks)
+    if(!wanted.has(id)){
+      rockGroup.remove(mesh); rockPool.push(mesh); activeRocks.delete(id);
+    }
+}
+
+/* =====================================================================
+   STAGE 2a (continued) — UNLIMITED GROUND.
+   terrainH(x,z) is defined EVERYWHERE, but we only draw one 300 m patch;
+   driving past its edge used to leave the rover floating on nothing.
+   Fix: the patch FOLLOWS the rover. Its centre snaps to the vertex grid
+   (steps of QUANT), so re-displaced vertices land on exactly the same
+   world positions as before and the terrain never "crawls".
+   The textures are pinned to the WORLD via texture.offset, otherwise
+   they would slide along with the recentred patch.
+   ===================================================================== */
+const QUANT = SIZE / SEGS;            // vertex spacing (2 m) = snap step
+/* the vertices' LOCAL x/z never change — cache them once */
+const localX = new Float32Array(posAttr.count);
+const localZ = new Float32Array(posAttr.count);
+for(let i = 0; i < posAttr.count; i++){
+  localX[i] = posAttr.getX(i);
+  localZ[i] = posAttr.getZ(i);
+}
+let groundCx = Infinity, groundCz = Infinity;
+function updateGround(x, z){
+  const cx = Math.round(x / QUANT) * QUANT;
+  const cz = Math.round(z / QUANT) * QUANT;
+  if(cx === groundCx && cz === groundCz) return;   // rover still in same cell
+  groundCx = cx; groundCz = cz;
+  ground.position.set(cx, 0, cz);                  // move the patch...
+  for(let i = 0; i < posAttr.count; i++){          // ...and re-shape it
+    const wx = localX[i] + cx, wz = localZ[i] + cz;
+    const ch = cratersAt(wx, wz);      // negative inside a bowl, + on the rim
+    posAttr.setY(i, baseH(wx, wz) + ch);
+    /* crater shading: the deeper the point, the darker the ground;
+       the rim (ch > 0) gets a touch brighter, like sunlit crater edges */
+    const shade = Math.max(0.4, Math.min(1.12, 1 + ch * 0.16));
+    colAttr.setXYZ(i, shade, shade, shade);
+  }
+  posAttr.needsUpdate = true;
+  colAttr.needsUpdate = true;
+  groundGeo.computeVertexNormals();                // recompute lighting
+  groundGeo.attributes.normal.needsUpdate = true;
+  /* cancel the patch offset in UV space -> texture stays glued to the world */
+  marsTex.map.offset.set(cx / TILE, -cz / TILE);
+  marsTex.bump.offset.set(cx / TILE, -cz / TILE);
+  /* rocks near the new centre appear, far ones are recycled */
+  updateRocks(cx, cz);
+}
+updateGround(0, 0);                    // initial shape
 
 /* =====================================================================
    STAGE 3 — THE ROVER AS A HIERARCHY (the core exam requirement).
@@ -286,6 +529,7 @@ let heading = 0;       // facing direction in radians (0 = facing -Z)
 let vel = 0;           // signed speed (negative = reverse)
 let eyePitch = 0;      // head tilt controlled with keys 1/2
 let eyeYaw = 0;        // head pan (left/right) controlled with keys 9/0
+let bump = 0;          // 1 right after driving over a small rock, fades to 0
 
 const keys = {};
 addEventListener('keydown', e => {
@@ -322,15 +566,69 @@ function animate(){
   px += -Math.sin(heading) * vel * dt;
   pz += -Math.cos(heading) * vel * dt;
 
-  /* place the rover ON the terrain — just ask the height function.
-     (It stays level on slopes for now: stage 4 tilts it using the
-     terrain normal and a quaternion.) */
+  /* --- collision with rocks: the rover cannot drive through them.
+     Both rover and rock are treated as CIRCLES on the ground plane
+     (cheap and robust). If the new position enters a rock's circle,
+     the rover is pushed back OUT to the contact edge and stopped —
+     it hits the rock and can't go further, but steering lets it
+     slide around the obstacle.
+     EXCEPTION: very small rocks (radius < 0.3 m) don't block — the
+     treads climb OVER them; driving over one triggers a short jolt
+     (the 'bump' variable) that shakes the chassis, and eats a bit
+     of speed. Only the ~270 nearby rock meshes are checked, so the
+     cost is negligible.
+     (Later, the pickup feature can reuse this same loop to detect
+     "rover is touching rock X".) */
+  for(const mesh of activeRocks.values()){
+    const R = mesh.userData.radius;
+    const dx = px - mesh.position.x, dz = pz - mesh.position.z;
+    const d2 = dx*dx + dz*dz;
+    if(R < 0.3){                                   // small: crossable
+      if(d2 < (R + 0.9)**2 && Math.abs(vel) > 0.3){
+        bump = 1;                                  // start the jolt
+        vel *= 1 - 1.2 * dt;                       // the stone steals some speed
+      }
+      continue;
+    }
+    const rr = R * 0.85 + 1.0;                     // rock radius + rover half-size
+    if(d2 < rr*rr){
+      const d = Math.sqrt(d2) || 1e-6;             // distance (guard centre hit)
+      px = mesh.position.x + dx/d * rr;            // back out to the contact circle
+      pz = mesh.position.z + dz/d * rr;
+      vel = 0;                                     // the impact stops the rover
+    }
+  }
+  bump = Math.max(0, bump - dt * 4);               // the jolt fades out quickly
+
+  /* the ground patch follows the rover: the world never ends */
+  updateGround(px, pz);
+
+  /* place the rover ON the terrain — just ask the height function */
   const gy = terrainH(px, pz);
   rover.position.set(px, gy, pz);
-  rover.rotation.y = heading;
+
+  /* --- STAGE 4 (arrived early): tilt the rover to the slope.
+     We build an orthonormal basis: 'up' is the terrain normal,
+     'fwd' is the heading direction projected onto the ground plane,
+     'right' completes the triad. The basis becomes a rotation matrix,
+     the matrix a quaternion, and slerp smooths the transition so the
+     rover doesn't snap when the slope changes (e.g. entering a crater). */
+  const up  = terrainNormal(px, pz);
+  const fwd = new THREE.Vector3(-Math.sin(heading), 0, -Math.cos(heading));
+  fwd.addScaledVector(up, -fwd.dot(up)).normalize();  // project onto the slope
+  const back  = fwd.clone().negate();                 // basis wants -Z = forward
+  const right = new THREE.Vector3().crossVectors(up, back).normalize();
+  const m = new THREE.Matrix4().makeBasis(right, up, back);
+  const q = new THREE.Quaternion().setFromRotationMatrix(m);
+  rover.quaternion.slerp(q, Math.min(dt*7, 1));
 
   /* the sky follows the rover: infinite starfield illusion */
   skyGroup.position.set(px, 0, pz);
+
+  /* the sun follows too, so the light direction stays constant
+     everywhere the rover goes, not only near the origin */
+  sun.position.set(px + 60, 80, pz + 40);
+  sun.target.position.set(px, 0, pz);
 
   /* --- hierarchy animations (stage 3 in motion) --- */
   /* head tilt: ONE rotation and every child (eyes, lenses, irises)
@@ -349,7 +647,11 @@ function animate(){
   arms.forEach((a, i) =>
     a.rotation.x = Math.sin(t*3 + i*Math.PI) * 0.05 * Math.min(sp, 3)
                  + Math.sin(t*0.8 + i) * 0.03);
-  chassis.position.y = 0.62 + Math.sin(t*9) * 0.006 * Math.min(sp, 4);
+  /* the small-rock jolt: fast vertical rattle + a hint of roll on the
+     chassis while 'bump' fades — reads as the treads climbing a stone */
+  chassis.position.y = 0.62 + Math.sin(t*9) * 0.006 * Math.min(sp, 4)
+                     + bump * Math.abs(Math.sin(t*40)) * 0.06;
+  chassis.rotation.z = bump * Math.sin(t*33) * 0.04;
   beacon.material.color.setHex((t % 1.2) < 0.15 ? 0xff8877 : 0x661a11);
 
   /* --- chase camera: a point behind the rover, smoothed with lerp --- */
