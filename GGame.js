@@ -1,25 +1,14 @@
 /* =====================================================================
-   GGame.js — Mars Rover project, stages 1+2+3 integrated.
+   GGame.js — Mars Rover project
 
    STAGE 1: renderer / scene / camera / lights / animation loop
    STAGE 2: procedural terrain (a height FUNCTION) + arrow-key driving
    STAGE 3: the rover as a HIERARCHICAL MODEL (the core requirement)
 
-   Not here yet (next stages):
-     4 - tilt the rover to the terrain slope (quaternion from normal)
-     5 - tread scrolling, dust, more animations
-     6 - the two eye cameras with picture-in-picture feeds
-     7 - sky dome, stars, the whole solar system
-     8 - headlights, HUD polish (ground color+bump textures: done)
-
    'THREE' is the global created by three.min.js, loaded before this
    file in index.html.
    ===================================================================== */
 'use strict';
-
-/* =====================================================================
-   STAGE 1 — the skeleton every Three.js app has
-   ===================================================================== */
 
 /* 1. RENDERER — draws onto a <canvas> using WebGL */
 const renderer = new THREE.WebGLRenderer({antialias: true});
@@ -52,8 +41,8 @@ scene.add(new THREE.AmbientLight(0x886655, 0.55));
    Key details:
    - fog:false            -> stars ignore the dust fog (they're in space)
    - sizeAttenuation:false-> constant pixel size regardless of distance
-   - the group FOLLOWS the rover in the loop, so the sky never gets
-     closer no matter how far you drive (like a real sky)
+   - the group follows the rover in the loop, so the sky never gets
+     closer no matter how far you drive
    ===================================================================== */
 const skyGroup = new THREE.Group();
 scene.add(skyGroup);
@@ -83,7 +72,7 @@ scene.add(skyGroup);
    onto the same imaginary sphere as the random stars. Faint lines
    join the stars so the two Dippers read at a glance. They live in
    skyGroup, so they follow the rover like the rest of the sky and
-   stay fixed toward NORTH (-Z): Polaris really shows where north is.
+   stay fixed toward north (-Z)
    ===================================================================== */
 let polarisMat;                        // twinkled in the animation loop
 {
@@ -94,26 +83,24 @@ let polarisMat;                        // twinkled in the animation loop
       Math.sin(el),
      -Math.cos(az) * Math.cos(el)).multiplyScalar(RAD);
 
-  /* the Big Dipper: handle (Alkaid, Mizar, Alioth) into the bowl
-     (Megrez, Phecda, Merak, Dubhe) — shape traced from the real
-     asterism, simplified */
+  /* the Big Dipper:*/
   const bigDipper = [
-    [0.00, 0.00],   // Alkaid (tip of the handle)
-    [0.13, 0.07],   // Mizar
-    [0.25, 0.11],   // Alioth
-    [0.36, 0.17],   // Megrez (bowl, inner top)
-    [0.39, 0.01],   // Phecda (bowl, inner bottom)
-    [0.55, 0.05],   // Merak  (bowl, outer bottom)
-    [0.53, 0.23]];  // Dubhe  (bowl, outer top)
+    [0.00, 0.00],  
+    [0.13, 0.07],   
+    [0.25, 0.11],   
+    [0.36, 0.17],   
+    [0.39, 0.01],   
+    [0.55, 0.05],   
+    [0.53, 0.23]]; 
   /* the Little Dipper: Polaris is the TIP of its handle */
   const littleDipper = [
-    [0.00,  0.00],  // POLARIS — the North Star
-    [0.06, -0.08],  // Yildun
-    [0.10, -0.16],  // Epsilon UMi
-    [0.13, -0.24],  // Zeta UMi (bowl)
-    [0.22, -0.29],  // Eta UMi  (bowl)
-    [0.30, -0.24],  // Pherkad  (bowl)
-    [0.21, -0.17]]; // Kochab   (bowl)
+    [0.00,  0.00],  
+    [0.06, -0.08],  
+    [0.10, -0.16],  
+    [0.13, -0.24],  
+    [0.22, -0.29],  
+    [0.30, -0.24], 
+    [0.21, -0.17]]; 
   /* same wiring for both: along the handle, around the bowl, closed */
   const links = [[0,1],[1,2],[2,3],[3,4],[4,5],[5,6],[6,3]];
 
@@ -133,8 +120,7 @@ let polarisMat;                        // twinkled in the animation loop
   constellation(bigDipper, -0.75, 0.30, 3.5);              // Ursa Major
   const lp = constellation(littleDipper, 0.10, 0.62, 3.0); // Ursa Minor
 
-  /* Polaris gets its own point on top: bigger, warmer, and twinkling
-     (the material's size is animated in the loop) */
+  /* Polaris gets its own point on top: bigger, warmer, and twinkling */
   polarisMat = new THREE.PointsMaterial({color: 0xfff3c8, size: 6,
     sizeAttenuation: false, fog: false, transparent: true});
   skyGroup.add(new THREE.Points(
@@ -153,7 +139,7 @@ addEventListener('resize', () => {
 });
 
 /* =====================================================================
-   STAGE 2a — TERRAIN AS A FUNCTION.
+   TERRAIN AS A FUNCTION.
    We never store the terrain: terrainH(x,z) computes the height at ANY
    point on demand. The visible mesh is just a flat plane whose vertices
    we displace to match the function. Since the function exists
@@ -222,9 +208,8 @@ function terrainNormal(x, z){
 }
 
 /* =====================================================================
-   STAGE 8 (arrived early) — PROCEDURAL MARS TEXTURES.
-   THREE texture KINDS (the requirement says "textures of different
-   kinds (color, normal, specular, …)"):
+   PROCEDURAL MARS TEXTURES.
+   THREE texture KINDS
    - a COLOR map   on the ground: rust base + tone patches + pebbles
    - a NORMAL map  on the ground: computed from the height canvas,
                    RGB-encoded tangent-space normals — the lighting
@@ -232,9 +217,8 @@ function terrainNormal(x, z){
    - a BUMP map    on the rocks: grayscale height detail
    (Three.js ignores bumpMap when normalMap is present on the SAME
    material, which is why the two kinds live on different objects.)
-   Everything is drawn on 2D canvases (like the license plate) so the
-   repo needs no image files. Blobs are stamped at 9 wrapped positions
-   so the textures TILE seamlessly with RepeatWrapping.
+   Everything is drawn on 2D canvases. Blobs are stamped at 9 wrapped positions
+   so the textures tile seamlessly with RepeatWrapping.
    ===================================================================== */
 const TILE = 25;                     // one texture copy covers 25 m of ground
 function makeMarsTextures(){
@@ -334,7 +318,7 @@ scene.add(ground);
 
 /* =====================================================================
    ROCKS — big boulders and small stones scattered over the whole
-   (unlimited) surface, in a DARKER RED than the soil.
+   surface, in a darker red than the soil.
    Same trick as the craters: rocks live on a virtual grid, each cell
    deterministically decides (via hash) if it holds rocks, where, and
    how big. Only the rocks near the rover exist as meshes; they are
@@ -352,7 +336,7 @@ const ROCK_CELL  = 16;   // one virtual cell may hold up to 1 big + 2 small rock
 const ROCK_RANGE = 7;    // rocks exist within ±7 cells (~112 m) of the rover
 
 /* darker red than the #93502a soil — three variants for variety.
-   The rocks carry the BUMP texture (third texture kind): grayscale
+   The rocks carry the BUMP texture: grayscale
    height detail that roughens their lighting. */
 const rockMats = [0x6b2115, 0x7a2a1a, 0x581b10].map(c =>
   new THREE.MeshStandardMaterial({color: c, roughness: 0.92, metalness: 0.05,
@@ -362,7 +346,7 @@ const rockGeo = new THREE.DodecahedronGeometry(1, 0);   // low-poly boulder shap
 /* GOLD-VEINED BOULDERS — a rare variant of the BIG rocks (~30%).
    Two more procedural textures drawn on canvases:
    - a COLOR map: dark basalt mottling + branching gold veins
-   - a METALNESS map: the SAME veins painted white on black — metal=1
+   - a METALNESS map: the same veins painted white on black — metal=1
      only along the veins, so the gold catches the sun and the
      headlights while the rock around it stays dull.
    The vein paths are generated once as random walks and stroked onto
@@ -546,7 +530,7 @@ function grabRock(){
   let best = null, bestD = Infinity;
   for(const mesh of obstacles()){
     if(!mesh.userData.big) continue;           // only boulders need the arms
-    if(mesh.userData.golden) continue;         // purple ones can't be moved — only shot
+    if(mesh.userData.golden) continue;         // purple ones can't be moved, only shot
     if(flyingRocks.some(f => f.mesh === mesh)) continue;  // can't catch a moving rock
     const dx = mesh.position.x - px, dz = mesh.position.z - pz;
     const d = Math.hypot(dx, dz);
@@ -583,7 +567,7 @@ function dropRock(){
 }
 
 /* --- THROWING --- */
-const MARS_G = 3.71;          // real Mars gravity, m/s^2 (Earth is 9.81)
+const MARS_G = 3.71;          // real Mars gravity, m/s^2
 const flyingRocks = [];       // rocks currently flying or rolling
 const _rollAxis = new THREE.Vector3();   // scratch vector, reused every frame
 
@@ -595,7 +579,7 @@ function throwRock(){
   /* a gentle toss, not a hurl: barely forward and up — the rock lands
      a couple of metres ahead; moving adds a little momentum */
   const v0 = 2.5 + Math.max(0, vel) * 0.3;
-  /* 'ghost': for the first instants the rock is NOT an obstacle for
+  /* 'ghost': for the first instants the rock is not an obstacle for
      the rover — it spawns right at the hands, inside the rover's own
      collision circle, and would otherwise shove the rover backwards
      the moment it is released */
@@ -607,10 +591,9 @@ function throwRock(){
 }
 
 /* =====================================================================
-   SHOOTING (key F) — the rover blasts the PURPLE boulders to pieces
-   (the red ones absorb the shot: those are for the arms instead).
-   A continuous RED LASER fires from the rover's head, straight ahead.
-   If it hits a purple rock, the rock EXPLODES: it disappears from
+   SHOOTING (key F) — the rover blasts the purple boulders to pieces
+   A continuous green laser fires from the rover's head, straight ahead.
+   If it hits a purple rock, the rock explodes: it disappears from
    every bookkeeping structure for good (movedRocks guarantees it
    never respawns) and bursts into a dozen small fragments that fly
    outward, fall back under Mars gravity, bounce, then shrink away —
@@ -623,13 +606,12 @@ const flashGeo = new THREE.SphereGeometry(0.16, 8, 6);
 const LASER_RANGE = 45;
 const _up = new THREE.Vector3(0, 1, 0);
 
-/* LASER, not a projectile: the hit is INSTANT (hit-scan). We march
+/* laser: the hit is instant (hit-scan). We march
    along the ray until the terrain or a boulder stops it, then draw a
-   solid red beam from the muzzle to that exact point; the beam (and
-   a little flash at the impact) fade out over ~0.2 s. */
+   solid green beam from the muzzle to that exact point. */
 function shoot(){
   const fx = -Math.sin(heading), fz = -Math.cos(heading);
-  /* AIMING: the beam follows the HEAD TILT (keys 1/2), with a small
+  /* The beam follows the hea tilt, with a small
      natural droop — so by default it meets the ground ~30 m ahead
      instead of flying level over every low boulder. The muzzle also
      sits lower than the eyes, closer to boulder height. */
@@ -655,13 +637,13 @@ function shoot(){
       }
     }
   }
-  /* only the PURPLE boulders are destructible; a red one (and the
+  /* only the purple boulders are destructible; a red one (and the
      ground) simply absorbs the beam */
   if(target && target.userData.golden) explodeRock(target);
 
-  /* the visible beam: a thin red cylinder from muzzle to hit point
+  /* the visible beam: a thin green cylinder from muzzle to hit point
      (cylinder axis is Y, so a quaternion turns it onto the ray) */
-  const mat = new THREE.MeshBasicMaterial({color: 0xff2222,
+  const mat = new THREE.MeshBasicMaterial({color: 0x22ff44,
                                            transparent: true, opacity: 0.9});
   const beam = new THREE.Mesh(laserGeo, mat);
   beam.scale.y = hitT;
@@ -800,7 +782,7 @@ function updateFlyingRocks(dt){
          like terrainNormal) accelerates the rock downhill; friction
          brakes it. Inside a crater bowl the rock rolls down the wall,
          crosses the bottom, climbs a little, comes back — and the
-         oscillation dies out exactly at the LOWEST point. */
+         oscillation dies out exactly at the lowest point. */
       const e = 0.5, x = m.position.x, z = m.position.z;
       const gx = (terrainH(x+e, z) - terrainH(x-e, z)) / (2*e);
       const gz = (terrainH(x, z+e) - terrainH(x, z-e)) / (2*e);
@@ -808,9 +790,9 @@ function updateFlyingRocks(dt){
         f.vx -= gx * MARS_G * 2.5 * dt;
         f.vz -= gz * MARS_G * 2.5 * dt;
       }
-      /* COULOMB friction: a CONSTANT braking deceleration, like real
+      /* Coulomb friction: a constant braking deceleration, like real
          dry friction — unlike viscous friction (v *= factor) it brings
-         the rock to a full stop BY ITSELF, exactly where the slope is
+         the rock to a full stop by itself, exactly where the slope is
          no longer steep enough to push it: a few seconds on open
          ground, the bottom of the bowl inside a crater */
       const sp2 = Math.hypot(f.vx, f.vz);
@@ -827,7 +809,7 @@ function updateFlyingRocks(dt){
       m.position.y = terrainH(x, z) + R * 0.55;   // hug the slope, on TOP of it
     }
 
-    /* visual spin: rotate around the horizontal axis PERPENDICULAR to
+    /* visual spin: rotate around the horizontal axis perpendicular to
        the motion, by (distance / radius) — like a real rolling stone */
     const sp = Math.hypot(f.vx, f.vz);
     if(sp > 0.01){
@@ -838,13 +820,13 @@ function updateFlyingRocks(dt){
 }
 
 /* =====================================================================
-   STAGE 2a (continued) — UNLIMITED GROUND.
+   UNLIMITED GROUND.
    terrainH(x,z) is defined EVERYWHERE, but we only draw one 300 m patch;
    driving past its edge used to leave the rover floating on nothing.
-   Fix: the patch FOLLOWS the rover. Its centre snaps to the vertex grid
-   (steps of QUANT), so re-displaced vertices land on exactly the same
+   Fix: the patch follows the rover. Its centre snaps to the vertex grid
+   (steps of quant), so re-displaced vertices land on exactly the same
    world positions as before and the terrain never "crawls".
-   The textures are pinned to the WORLD via texture.offset, otherwise
+   The textures are pinned to the world via texture.offset, otherwise
    they would slide along with the recentred patch.
    ===================================================================== */
 const QUANT = SIZE / SEGS;            // vertex spacing (2 m) = snap step
@@ -884,13 +866,13 @@ function updateGround(x, z){
 updateGround(0, 0);                    // initial shape
 
 /* =====================================================================
-   STAGE 3 — THE ROVER AS A HIERARCHY (the core exam requirement).
+  THE ROVER AS A HIERARCHY
 
-   Parts are ATTACHED to other parts with .add(). A child's position and
-   rotation are expressed IN ITS PARENT'S SPACE, so moving a parent
+   Parts are attached to other parts with .add(). A child's position and
+   rotation are expressed in its parent space, so moving a parent
    moves all of its children:
 
-     rover (Group)                     <- moving this moves EVERYTHING
+     rover (Group)                     <- moving this moves everything
       ├─ tread left / tread right (+ fenders)
       └─ chassis (Group)
           ├─ body box, front hatch
@@ -900,11 +882,11 @@ updateGround(0, 0);                    // initial shape
           ├─ antenna
           └─ beacon
 
-   THREE.Group is an invisible node used as a JOINT: place the group at
+   THREE.Group is an invisible node used as a joint: place the group at
    the pivot point, add the limb inside it shifted away from the pivot,
    and rotating the group rotates the limb around the joint. This is
    what "animations that exploit the hierarchical structure" means.
-   The rover FACES -Z (the Three.js "forward" convention).
+   The rover faces -Z (the Three.js "forward" convention).
    ===================================================================== */
 
 /* shared materials */
@@ -925,21 +907,20 @@ const hatch = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.62, 0.06), darkMat);
 hatch.position.set(0, 0, -0.7);        // -Z is the front
 chassis.add(hatch);
 
-/* --- retro-reflective safety stripes laid ON TOP of the fenders
-       (the bands covering the treads), where they are clearly visible
-       from the chase camera. Alternating white/orange plates, slightly
-       emissive so they read as light-catching even in shadow, like
-       real reflective tape. Added later, after the fenders exist. --- */
+/* --- retro-reflective safety stripes laid on top of the fenders
+       where they are clearly visible from the chase camera. 
+       Alternating white/orange plates, slightly emissive so they read as light-catching
+       even in shadow, like real reflective tape.*/
 const reflWhite  = new THREE.MeshStandardMaterial({color:0xf5f5f0, emissive:0x555550,
                                                    roughness:0.15, metalness:0.85});
 const reflOrange = new THREE.MeshStandardMaterial({color:0xff6a1a, emissive:0x7a2a00,
                                                    roughness:0.2,  metalness:0.6});
 
-/* --- treads: children of the ROVER, not the chassis.
+/* --- treads: children of the rpver, not the chassis.
        Shape: a cylinder laid on its side (axis along X = the width),
-       then SCALED into an oval: local x is flattened (world height),
+       then scaled into an oval: local x is flattened (world height),
        local z is stretched (world length) — a proper tank-track profile.
-       Note the order: scale is applied in LOCAL space, before rotation. --- */
+       Note the order: scale is applied in local space, before rotation. --- */
 for(const sx of [-1, 1]){              // sx = -1 left side, +1 right side
   const tread = new THREE.Mesh(new THREE.CylinderGeometry(0.36, 0.36, 0.5, 24), darkMat);
   tread.rotation.z = Math.PI/2;        // cylinder axis: Y -> X (sideways)
@@ -951,7 +932,7 @@ for(const sx of [-1, 1]){              // sx = -1 left side, +1 right side
   rover.add(fender);
 
   /* reflective plates lying flat on the fender top, alternating colours
-     along its length (fender top is at y = 0.68 + 0.04) */
+     along its length */
   for(let i = 0; i < 5; i++){
     const plate = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.025, 0.3),
                                  i % 2 === 0 ? reflWhite : reflOrange);
@@ -960,7 +941,7 @@ for(const sx of [-1, 1]){              // sx = -1 left side, +1 right side
   }
 }
 
-/* --- arms: the SHOULDER group is the joint at the chassis side; the arm
+/* --- arms: the shoulder group is the joint at the chassis side; the arm
        and hand extend forward from it, so rotating the shoulder swings
        the whole limb --- */
 const arms = [];
@@ -1030,7 +1011,7 @@ head.add(eyeCam);
   const ctx = cv.getContext('2d');
   ctx.fillStyle = '#f2f2ee';                       // plate background
   ctx.fillRect(0, 0, 1024, 288);
-  ctx.fillStyle = '#1a3fa8';                       // EU-style blue band
+  ctx.fillStyle = '#1a3fa8';                      
   ctx.fillRect(0, 0, 96, 288);
   ctx.strokeStyle = '#222'; ctx.lineWidth = 14;
   ctx.strokeRect(7, 7, 1010, 274);                 // border
@@ -1046,8 +1027,8 @@ head.add(eyeCam);
 }
 
 /* --- headlights: two SpotLights at the front of the chassis.
-       A SpotLight shines from its position toward a TARGET object;
-       lamp, light and target are ALL children of the chassis, so the
+       A SpotLight shines from its position toward a target object;
+       lamp, light and target are all children of the chassis, so the
        light cones follow every movement and tilt of the rover
        automatically — hierarchy again. Key L toggles them. --- */
 const headlights = [];
@@ -1059,7 +1040,7 @@ for(const sx of [-1, 1]){
   lamp.rotation.x = Math.PI/2;           // cylinder face points forward
   lamp.position.set(sx*0.45, 0.28, -0.71);
   chassis.add(lamp);
-  /* the actual light: aims forward and slightly DOWN, so the cone
+  /* the actual light: aims forward and slightly down, so the cone
      lands on the ground a few metres ahead of the rover */
   const spot = new THREE.SpotLight(0xffe9c0, 1.6, 45, 0.55, 0.45);
   spot.position.copy(lamp.position);
@@ -1082,7 +1063,7 @@ beacon.position.set(0.59, 1.0, 0.4);
 chassis.add(beacon);
 
 /* =====================================================================
-   STAGE 2b — DRIVING = state + integration.
+   DRIVING = state + integration.
    The vehicle is three numbers: position (px,pz), heading, velocity.
    Each frame: read keys -> update velocity/heading -> move -> then just
    LOOK UP the terrain height at the new position and place the rover
@@ -1154,7 +1135,7 @@ function toggleMusic(){
 
 /* =====================================================================
    START SCREEN — the Mars scene renders live behind the translucent
-   menu; PLAY removes it and unlocks the keyboard. The MUSIC button is
+   menu; PLAY removes it and unlocks the keyboard. The music button is
    a click = a valid user gesture, so the browser lets audio start
    right from the menu.
    ===================================================================== */
@@ -1165,7 +1146,6 @@ document.getElementById('playBtn').addEventListener('click', () => {
 });
 document.getElementById('musicBtn').addEventListener('click', e => {
   toggleMusic();
-  /* no text on the button: the note glyph glows when music is on */
   e.target.classList.toggle('on', musicOn);
 });
 
@@ -1185,7 +1165,7 @@ addEventListener('keydown', e => {
 addEventListener('keyup', e => keys[e.code] = false);
 
 /* =====================================================================
-   STAGE 1 (continued) — the animation loop ties everything together.
+   The animation loop ties everything together.
    dt = seconds since the previous frame: multiplying every speed by dt
    makes motion frame-rate independent.
    ===================================================================== */
@@ -1213,21 +1193,18 @@ function animate(){
   pz += -Math.cos(heading) * vel * dt;
 
   /* --- collision with rocks: the rover cannot drive through them.
-     Both rover and rock are treated as CIRCLES on the ground plane
+     Both rover and rock are treated as circles on the ground plane
      (cheap and robust). If the new position enters a rock's circle,
-     the rover is pushed back OUT to the contact edge and stopped —
+     the rover is pushed back out to the contact edge and stopped —
      it hits the rock and can't go further, but steering lets it
      slide around the obstacle.
-     TWO CLASSES, two behaviours (the 'big' flag set at spawn time):
-     - SMALL rocks never block: the treads climb OVER them; driving
+     Two classes, two behaviours:
+     - small rocks never block: the treads climb over them; driving
        over one triggers a short jolt (the 'bump' variable) that
        shakes the chassis and eats a bit of speed — bigger stone,
        bigger jolt.
-     - BIG boulders always stop the rover.
-     Only the ~270 nearby rock meshes are checked, so the cost is
-     negligible. obstacles() also yields the boulders the rover has
-     re-placed by hand; the one currently IN the hands is skipped —
-     you cannot collide with what you are carrying. */
+     - big boulders always stop the rover.
+  */
   for(const mesh of obstacles()){
     if(mesh === carried) continue;
     if(mesh.userData.ghost) continue;   // just-thrown rock, still leaving the hands
@@ -1254,11 +1231,11 @@ function animate(){
   /* the ground patch follows the rover: the world never ends */
   updateGround(px, pz);
 
-  /* place the rover ON the terrain — just ask the height function */
+  /* place the rover on the terrain — just ask the height function */
   const gy = terrainH(px, pz);
   rover.position.set(px, gy, pz);
 
-  /* --- STAGE 4 (arrived early): tilt the rover to the slope.
+  /* Tilt the rover to the slope.
      We build an orthonormal basis: 'up' is the terrain normal,
      'fwd' is the heading direction projected onto the ground plane,
      'right' completes the triad. The basis becomes a rotation matrix,
@@ -1281,8 +1258,8 @@ function animate(){
   sun.position.set(px + 60, 80, pz + 40);
   sun.target.position.set(px, 0, pz);
 
-  /* --- hierarchy animations (stage 3 in motion) --- */
-  /* head tilt: ONE rotation and every child (eyes, lenses, irises)
+  /* --- hierarchy animations--- */
+  /* head tilt: one rotation and every child (eyes, lenses, irises)
      follows — that is the hierarchy working */
   if(keys['Digit1']) eyePitch = Math.min( 1.15, eyePitch + dt*1.6);
   if(keys['Digit2']) eyePitch = Math.max(-0.55, eyePitch - dt*1.6);
@@ -1294,7 +1271,7 @@ function animate(){
 
   /* --- rock carrying: the arm extension eases toward 1 while a rock
      is held, back to 0 after the drop; the boulder itself glides into
-     the "hands" position IN CHASSIS SPACE (it is a chassis child now,
+     the "hands" position in chassis space (it is a chassis child now,
      so a simple local lerp is all it takes) */
   reach += ((carried ? 1 : 0) - reach) * Math.min(dt * 4, 1);
   updateFlyingRocks(dt);               // thrown rocks fly, roll and settle
@@ -1309,8 +1286,8 @@ function animate(){
 
   /* arms sway more when driving faster; beacon blinks; body bounces
      slightly (only the chassis: treads stay on the ground).
-     While grabbing, the sway fades out and the arms REACH forward and
-     STRETCH (scaling the shoulder group stretches the whole limb —
+     While grabbing, the sway fades out and the arms reach forward and
+     stretch (scaling the shoulder group stretches the whole limb —
      hierarchy again) */
   const sp = Math.abs(vel);
   arms.forEach((a, i) => {
