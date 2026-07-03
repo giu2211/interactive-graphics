@@ -76,6 +76,71 @@ scene.add(skyGroup);
   })));
 }
 
+/* =====================================================================
+   CONSTELLATIONS — Ursa Major, Ursa Minor and the NORTH STAR.
+   Each constellation is a small "star chart": a list of [azimuth,
+   elevation] offsets (radians) around a centre direction, projected
+   onto the same imaginary sphere as the random stars. Faint lines
+   join the stars so the two Dippers read at a glance. They live in
+   skyGroup, so they follow the rover like the rest of the sky and
+   stay fixed toward NORTH (-Z): Polaris really shows where north is.
+   ===================================================================== */
+let polarisMat;                        // twinkled in the animation loop
+{
+  const RAD = 425;                     // just inside the random-star shell
+  /* azimuth 0 = north (-Z), elevation = angle above the horizon */
+  const dir = (az, el) => new THREE.Vector3(
+      Math.sin(az) * Math.cos(el),
+      Math.sin(el),
+     -Math.cos(az) * Math.cos(el)).multiplyScalar(RAD);
+
+  /* the Big Dipper: handle (Alkaid, Mizar, Alioth) into the bowl
+     (Megrez, Phecda, Merak, Dubhe) — shape traced from the real
+     asterism, simplified */
+  const bigDipper = [
+    [0.00, 0.00],   // Alkaid (tip of the handle)
+    [0.13, 0.07],   // Mizar
+    [0.25, 0.11],   // Alioth
+    [0.36, 0.17],   // Megrez (bowl, inner top)
+    [0.39, 0.01],   // Phecda (bowl, inner bottom)
+    [0.55, 0.05],   // Merak  (bowl, outer bottom)
+    [0.53, 0.23]];  // Dubhe  (bowl, outer top)
+  /* the Little Dipper: Polaris is the TIP of its handle */
+  const littleDipper = [
+    [0.00,  0.00],  // POLARIS — the North Star
+    [0.06, -0.08],  // Yildun
+    [0.10, -0.16],  // Epsilon UMi
+    [0.13, -0.24],  // Zeta UMi (bowl)
+    [0.22, -0.29],  // Eta UMi  (bowl)
+    [0.30, -0.24],  // Pherkad  (bowl)
+    [0.21, -0.17]]; // Kochab   (bowl)
+  /* same wiring for both: along the handle, around the bowl, closed */
+  const links = [[0,1],[1,2],[2,3],[3,4],[4,5],[5,6],[6,3]];
+
+  /* builds the star points + the joining lines of one constellation */
+  function constellation(chart, az0, el0, size){
+    const pts = chart.map(([a, e]) => dir(az0 + a, el0 + e));
+    const sg = new THREE.BufferGeometry().setFromPoints(pts);
+    skyGroup.add(new THREE.Points(sg, new THREE.PointsMaterial({
+      color: 0xdfe8ff, size, sizeAttenuation: false, fog: false,
+      transparent: true, opacity: 0.95})));
+    const lg = new THREE.BufferGeometry().setFromPoints(
+      links.flatMap(([a, b]) => [pts[a], pts[b]]));
+    skyGroup.add(new THREE.LineSegments(lg, new THREE.LineBasicMaterial({
+      color: 0x91a3c9, transparent: true, opacity: 0.3, fog: false})));
+    return pts;
+  }
+  constellation(bigDipper, -0.75, 0.30, 3.5);              // Ursa Major
+  const lp = constellation(littleDipper, 0.10, 0.62, 3.0); // Ursa Minor
+
+  /* Polaris gets its own point on top: bigger, warmer, and twinkling
+     (the material's size is animated in the loop) */
+  polarisMat = new THREE.PointsMaterial({color: 0xfff3c8, size: 6,
+    sizeAttenuation: false, fog: false, transparent: true});
+  skyGroup.add(new THREE.Points(
+    new THREE.BufferGeometry().setFromPoints([lp[0]]), polarisMat));
+}
+
 /* keep canvas and camera in sync with the window size */
 addEventListener('resize', () => {
   camera.aspect = innerWidth/innerHeight;
@@ -294,6 +359,96 @@ const rockMats = [0x6b2115, 0x7a2a1a, 0x581b10].map(c =>
                                   bumpMap: marsTex.rockBump, bumpScale: 0.25}));
 const rockGeo = new THREE.DodecahedronGeometry(1, 0);   // low-poly boulder shape
 
+/* GOLD-VEINED BOULDERS — a rare variant of the BIG rocks (~30%).
+   Two more procedural textures drawn on canvases:
+   - a COLOR map: dark basalt mottling + branching gold veins
+   - a METALNESS map: the SAME veins painted white on black — metal=1
+     only along the veins, so the gold catches the sun and the
+     headlights while the rock around it stays dull.
+   The vein paths are generated once as random walks and stroked onto
+   BOTH canvases, so color and metalness match exactly. */
+const goldenMat = (() => {
+  const W = 512;
+  const cv = document.createElement('canvas'); cv.width = cv.height = W;
+  const mv = document.createElement('canvas'); mv.width = mv.height = W;
+  const ctx = cv.getContext('2d'), mtx = mv.getContext('2d');
+  ctx.fillStyle = '#2c1a3e'; ctx.fillRect(0, 0, W, W);   // deep purple base
+  mtx.fillStyle = '#000';    mtx.fillRect(0, 0, W, W);   // black = no metal
+  /* mottling (color only) — dark violet tones */
+  for(let i = 0; i < 900; i++){
+    ctx.fillStyle = Math.random() < 0.5 ? 'rgba(18,10,30,0.4)'
+                                        : 'rgba(80,50,110,0.35)';
+    ctx.fillRect(Math.random()*W, Math.random()*W,
+                 2 + Math.random()*5, 2 + Math.random()*5);
+  }
+  /* veins: each is a random walk; the point list is reused to stroke
+     gold on the color canvas, white on the metalness canvas, and a
+     thin brighter core on top */
+  for(let v = 0; v < 14; v++){
+    const pts = [[Math.random()*W, Math.random()*W]];
+    let a = Math.random() * Math.PI * 2;
+    const steps = 30 + Math.floor(Math.random()*50);
+    for(let s = 0; s < steps; s++){
+      a += (Math.random() - 0.5) * 0.9;              // the vein wanders
+      const [lx, ly] = pts[pts.length-1];
+      pts.push([lx + Math.cos(a)*7, ly + Math.sin(a)*7]);
+    }
+    const w = 5 + Math.random()*6;    // WIDE veins: bold against the purple
+    const stroke = (c, style, lw) => {
+      c.strokeStyle = style; c.lineWidth = lw; c.lineCap = 'round';
+      c.beginPath(); c.moveTo(pts[0][0], pts[0][1]);
+      for(const [x, y] of pts) c.lineTo(x, y);
+      c.stroke();
+    };
+    stroke(ctx, '#ffd24a', w);        // gold vein
+    stroke(ctx, '#fff0a0', w*0.4);    // brighter core
+    stroke(mtx, '#fff', w);           // metal follows the vein exactly
+  }
+  /* GLITTER: a dust of tiny bright specks, white and gold, painted on
+     BOTH canvases — being metallic on a low-roughness surface, each
+     speck catches the sun/headlights and twinkles as the view moves */
+  for(let i = 0; i < 1600; i++){
+    const x = Math.random()*W, y = Math.random()*W, s = 1 + Math.random();
+    ctx.fillStyle = Math.random() < 0.5 ? '#ffffff' : '#ffd86a';
+    ctx.fillRect(x, y, s, s);
+    mtx.fillStyle = '#fff';
+    mtx.fillRect(x, y, s, s);
+  }
+  return new THREE.MeshStandardMaterial({
+    map: new THREE.CanvasTexture(cv),
+    metalnessMap: new THREE.CanvasTexture(mv),
+    metalness: 1.0,                   // multiplied by the map: veins + glitter
+    roughness: 0.28,                  // glossy enough to make the glitter ping
+    bumpMap: marsTex.rockBump, bumpScale: 0.2
+  });
+})();
+
+/* GRAPE-CLUSTER SHAPE — golden boulders are built differently from
+   normal rocks: a central sphere buried under 12..17 smaller lobes
+   pushed well outward, like a bunch of grapes. They have their own
+   pool (goldenPool) because the compound object cannot be recycled
+   as a plain dodecahedron. */
+const goldSphereGeo = new THREE.SphereGeometry(1, 10, 8);
+const goldenPool = [];
+function makeGoldenRock(){
+  const g = new THREE.Mesh(goldSphereGeo, goldenMat);   // hidden centre
+  const n = 12 + Math.floor(Math.random() * 6);
+  for(let k = 0; k < n; k++){
+    const lobe = new THREE.Mesh(goldSphereGeo, goldenMat);
+    lobe.scale.setScalar(0.32 + Math.random() * 0.22);  // grape-sized
+    /* random direction, pushed FAR out: the silhouette becomes all
+       bumps, the central sphere only fills the gaps */
+    const a = Math.random() * Math.PI * 2;
+    const b = (Math.random() - 0.5) * Math.PI;
+    const r = 0.6 + Math.random() * 0.25;
+    lobe.position.set(Math.cos(a) * Math.cos(b) * r,
+                      Math.sin(b) * r * 0.9,
+                      Math.sin(a) * Math.cos(b) * r);
+    g.add(lobe);
+  }
+  return g;
+}
+
 const movedRocks = new Map();   // future pickup feature writes here
 
 /* deterministic list of the rocks belonging to one grid cell */
@@ -301,6 +456,7 @@ function rockSpecs(i, j){
   const specs = [];
   if(hash(i, j, 60) > 0.84)                       // BIG boulder: ~1 cell in 6
     specs.push({k: 0, big: true,
+      golden: hash(i, j, 64) > 0.5,               // half the boulders: golden
       x: (i + hash(i, j, 61)) * ROCK_CELL,
       z: (j + hash(i, j, 62)) * ROCK_CELL,
       s: 0.9 + hash(i, j, 63) * 1.3});            // radius 0.9..2.2 m
@@ -330,21 +486,28 @@ function updateRocks(cx, cz){
         if(Math.hypot(sp.x, sp.z) < 3) continue;       // keep the spawn point clear
         wanted.add(id);
         if(activeRocks.has(id)) continue;              // already in the scene
-        const mesh = rockPool.pop() || new THREE.Mesh(rockGeo, rockMats[0]);
+        /* golden popcorn boulders and plain rocks come from SEPARATE
+           pools: they are different objects (compound vs single mesh) */
+        const mesh = sp.golden
+          ? (goldenPool.pop() || makeGoldenRock())
+          : (rockPool.pop() || new THREE.Mesh(rockGeo, rockMats[0]));
         const h1 = hash(sp.x, sp.z, 80), h2 = hash(sp.x, sp.z, 81);
-        mesh.material = rockMats[Math.floor(h1 * rockMats.length) % rockMats.length];
+        if(!sp.golden)
+          mesh.material = rockMats[Math.floor(h1 * rockMats.length) % rockMats.length];
         /* squashed on Y + random yaw + slightly sunk = sits naturally */
         mesh.scale.set(sp.s, sp.s * (0.55 + h2 * 0.3), sp.s);
         mesh.rotation.set(0, h1 * Math.PI * 2, 0);
         mesh.position.set(sp.x, terrainH(sp.x, sp.z) + sp.s * 0.18, sp.z);
-        mesh.userData = {id, big: sp.big, radius: sp.s};
+        mesh.userData = {id, big: sp.big, radius: sp.s, golden: !!sp.golden};
         rockGroup.add(mesh);
         activeRocks.set(id, mesh);
       }
-  /* rocks that fell out of range go back to the pool */
+  /* rocks that fell out of range go back to their own pool */
   for(const [id, mesh] of activeRocks)
     if(!wanted.has(id)){
-      rockGroup.remove(mesh); rockPool.push(mesh); activeRocks.delete(id);
+      rockGroup.remove(mesh);
+      (mesh.userData.golden ? goldenPool : rockPool).push(mesh);
+      activeRocks.delete(id);
     }
 }
 
@@ -383,6 +546,7 @@ function grabRock(){
   let best = null, bestD = Infinity;
   for(const mesh of obstacles()){
     if(!mesh.userData.big) continue;           // only boulders need the arms
+    if(mesh.userData.golden) continue;         // purple ones can't be moved — only shot
     if(flyingRocks.some(f => f.mesh === mesh)) continue;  // can't catch a moving rock
     const dx = mesh.position.x - px, dz = mesh.position.z - pz;
     const d = Math.hypot(dx, dz);
@@ -440,6 +604,139 @@ function throwRock(){
     vx: -Math.sin(heading) * v0,
     vy: 1.8,
     vz: -Math.cos(heading) * v0});
+}
+
+/* =====================================================================
+   SHOOTING (key F) — the rover blasts the PURPLE boulders to pieces
+   (the red ones absorb the shot: those are for the arms instead).
+   A continuous RED LASER fires from the rover's head, straight ahead.
+   If it hits a purple rock, the rock EXPLODES: it disappears from
+   every bookkeeping structure for good (movedRocks guarantees it
+   never respawns) and bursts into a dozen small fragments that fly
+   outward, fall back under Mars gravity, bounce, then shrink away —
+   debris, not permanent objects, so the scene stays clean.
+   ===================================================================== */
+const lasers = [];       // beams currently fading out
+const fragments = [];    // debris from exploded boulders
+const laserGeo = new THREE.CylinderGeometry(0.035, 0.035, 1, 6);
+const flashGeo = new THREE.SphereGeometry(0.16, 8, 6);
+const LASER_RANGE = 45;
+const _up = new THREE.Vector3(0, 1, 0);
+
+/* LASER, not a projectile: the hit is INSTANT (hit-scan). We march
+   along the ray until the terrain or a boulder stops it, then draw a
+   solid red beam from the muzzle to that exact point; the beam (and
+   a little flash at the impact) fade out over ~0.2 s. */
+function shoot(){
+  const fx = -Math.sin(heading), fz = -Math.cos(heading);
+  /* AIMING: the beam follows the HEAD TILT (keys 1/2), with a small
+     natural droop — so by default it meets the ground ~30 m ahead
+     instead of flying level over every low boulder. The muzzle also
+     sits lower than the eyes, closer to boulder height. */
+  const p = eyePitch - 0.04;
+  const cp = Math.cos(p), sp2 = Math.sin(p);
+  const dx3 = fx * cp, dy3 = sp2, dz3 = fz * cp;   // unit ray direction
+  const oy = terrainH(px, pz) + 1.1;               // muzzle height
+  const ox = px + fx*1.2, oz = pz + fz*1.2;
+  let hitT = LASER_RANGE, target = null;
+  march:
+  for(let t = 0; t < LASER_RANGE; t += 0.4){
+    const x = ox + dx3*t, y = oy + dy3*t, z = oz + dz3*t;
+    if(terrainH(x, z) >= y){ hitT = t; break; }    // the ground stops it
+    for(const o of obstacles()){
+      if(o === carried || !o.userData.big || o.userData.ghost) continue;
+      const dx = x - o.position.x, dz = z - o.position.z;
+      /* 2D circle + vertical band: a boulder deep in a crater is NOT
+         hit by a beam passing above it */
+      if(dx*dx + dz*dz < (o.userData.radius * 0.85)**2 &&
+         Math.abs(y - o.position.y) < o.userData.radius * 1.1 + 0.5){
+        hitT = t; target = o;
+        break march;
+      }
+    }
+  }
+  /* only the PURPLE boulders are destructible; a red one (and the
+     ground) simply absorbs the beam */
+  if(target && target.userData.golden) explodeRock(target);
+
+  /* the visible beam: a thin red cylinder from muzzle to hit point
+     (cylinder axis is Y, so a quaternion turns it onto the ray) */
+  const mat = new THREE.MeshBasicMaterial({color: 0xff2222,
+                                           transparent: true, opacity: 0.9});
+  const beam = new THREE.Mesh(laserGeo, mat);
+  beam.scale.y = hitT;
+  beam.position.set(ox + dx3*hitT/2, oy + dy3*hitT/2, oz + dz3*hitT/2);
+  beam.quaternion.setFromUnitVectors(_up, new THREE.Vector3(dx3, dy3, dz3));
+  scene.add(beam);
+  const flash = new THREE.Mesh(flashGeo, mat);   // impact flash, same fade
+  flash.position.set(ox + dx3*hitT, oy + dy3*hitT, oz + dz3*hitT);
+  scene.add(flash);
+  lasers.push({beam, flash, mat, life: 0.22});
+}
+
+function explodeRock(rock){
+  const id = rock.userData.id, R = rock.userData.radius, P = rock.position;
+  /* the boulder leaves the world for good, whatever state it was in */
+  activeRocks.delete(id);
+  const pi = placedRocks.indexOf(rock);
+  if(pi >= 0) placedRocks.splice(pi, 1);
+  const fi = flyingRocks.findIndex(f => f.mesh === rock);
+  if(fi >= 0) flyingRocks.splice(fi, 1);
+  movedRocks.set(id, null);            // generator: never respawn it
+  rockGroup.remove(rock);
+  (rock.userData.golden ? goldenPool : rockPool).push(rock); // recycled later
+  /* the burst: small chunks of the same material, thrown outward and
+     UP — that upward bias is what makes it read as an explosion */
+  const n = 12 + Math.floor(Math.random() * 5);
+  for(let k = 0; k < n; k++){
+    const fm = new THREE.Mesh(rockGeo, rock.material);
+    const s = R * (0.12 + Math.random() * 0.16);
+    fm.scale.set(s, s * (0.6 + Math.random() * 0.4), s);
+    fm.position.set(P.x, P.y + R * 0.2, P.z);
+    fm.rotation.set(Math.random()*3, Math.random()*3, Math.random()*3);
+    scene.add(fm);
+    const a = Math.random() * Math.PI * 2;        // horizontal direction
+    const sp = 1.5 + Math.random() * 3.5;         // horizontal speed
+    fragments.push({mesh: fm, life: 2.5 + Math.random() * 1.5,
+      vx: Math.cos(a) * sp, vy: 1.5 + Math.random() * 3, vz: Math.sin(a) * sp,
+      rx: (Math.random()-0.5) * 8, rz: (Math.random()-0.5) * 8}); // tumble rates
+  }
+  bump = 1;                            // the shockwave shakes the chassis
+}
+
+/* the beams don't move — they just fade away quickly */
+function updateLasers(dt){
+  for(let i = lasers.length - 1; i >= 0; i--){
+    const l = lasers[i];
+    l.life -= dt;
+    l.mat.opacity = Math.max(0, l.life / 0.22) * 0.9;
+    if(l.life <= 0){
+      scene.remove(l.beam); scene.remove(l.flash);
+      lasers.splice(i, 1);
+    }
+  }
+}
+
+function updateFragments(dt){
+  for(let i = fragments.length - 1; i >= 0; i--){
+    const f = fragments[i], m = f.mesh;
+    f.life -= dt;
+    f.vy -= MARS_G * dt;                            // ballistic fall
+    m.position.x += f.vx * dt;
+    m.position.y += f.vy * dt;
+    m.position.z += f.vz * dt;
+    m.rotation.x += f.rx * dt;                      // tumbling in the air
+    m.rotation.z += f.rz * dt;
+    const gy = terrainH(m.position.x, m.position.z) + m.scale.y * 0.5;
+    if(m.position.y < gy){                          // damped bounce
+      m.position.y = gy;
+      f.vy = Math.abs(f.vy) * 0.35;
+      f.vx *= 0.6; f.vz *= 0.6; f.rx *= 0.6; f.rz *= 0.6;
+    }
+    /* near the end of its life the fragment shrinks to nothing */
+    if(f.life < 0.6) m.scale.multiplyScalar(Math.max(0, 1 - dt * 2.5));
+    if(f.life <= 0){ scene.remove(m); fragments.splice(i, 1); }
+  }
 }
 
 /* one physics step for every airborne/rolling rock, called each frame */
@@ -882,6 +1179,7 @@ addEventListener('keydown', e => {
   if(e.code === 'KeyP') grabRock();              // stretch the arms and grab
   if(e.code === 'KeyO') dropRock();              // set the boulder down
   if(e.code === 'KeyT') throwRock();             // hurl it forward
+  if(e.code === 'KeyF') shoot();                 // fire at the boulders
   if(e.code === 'KeyR'){ px = 0; pz = 0; heading = 0; vel = 0; eyePitch = 0; eyeYaw = 0; }
 });
 addEventListener('keyup', e => keys[e.code] = false);
@@ -1000,6 +1298,8 @@ function animate(){
      so a simple local lerp is all it takes) */
   reach += ((carried ? 1 : 0) - reach) * Math.min(dt * 4, 1);
   updateFlyingRocks(dt);               // thrown rocks fly, roll and settle
+  updateLasers(dt);                    // laser beams fade out
+  updateFragments(dt);                 // explosion debris falls and fades
   if(carried){
     const R = carried.userData.radius;
     carried.position.lerp(
@@ -1025,6 +1325,9 @@ function animate(){
                      + bump * Math.abs(Math.sin(t*40)) * 0.06;
   chassis.rotation.z = bump * Math.sin(t*33) * 0.04;
   beacon.material.color.setHex((t % 1.2) < 0.15 ? 0xff8877 : 0x661a11);
+  /* Polaris twinkles gently — a slow size pulse is enough to make it
+     stand out from every other star in the sky */
+  polarisMat.size = 6 + Math.sin(t * 2.5) * 1.2;
 
   /* headlights: the L key flips 'lightsOn'; the lamps stay softly lit
      when off so the rover front doesn't look broken */
