@@ -599,6 +599,34 @@ function throwRock(){
    outward, fall back under Mars gravity, bounce, then shrink away —
    debris, not permanent objects, so the scene stays clean.
    ===================================================================== */
+/* =====================================================================
+   EMERALDS: green gems hidden inside the purple boulders.
+   Blasting a purple rock releases 1..3 of them: scatter around
+   the blast point and stay there spinning and BOBBING like game
+   collectibles. 
+   ===================================================================== */
+const emeralds = [];
+const emeraldGeo = new THREE.OctahedronGeometry(0.22, 0);
+const emeraldMat = new THREE.MeshStandardMaterial({color: 0x2ecc4f,
+  emissive: 0x1d8f33, emissiveIntensity: 0.7,
+  roughness: 0.15, metalness: 0.3,
+  transparent: true, opacity: 0.7});   // slightly see-through, gem-like
+
+function spawnEmeralds(x, z, rockId){
+  const n = 1 + Math.floor(Math.random() * 3);       // 1..3 gems per boulder
+  for(let k = 0; k < n; k++){
+    const gem = new THREE.Mesh(emeraldGeo, emeraldMat);
+    gem.scale.set(1, 1.55, 1);                       // plumbob proportions
+    const a = Math.random() * Math.PI * 2, d = 0.6 + Math.random() * 1.4;
+    const gx = x + Math.cos(a) * d, gz = z + Math.sin(a) * d;
+    gem.position.set(gx, terrainH(gx, gz) + 1.6, gz);   // floats high, eye level
+    gem.userData = {emerald: true, id: rockId + '_gem' + k}; // future pickup hook
+    scene.add(gem);
+    emeralds.push({mesh: gem, baseY: gem.position.y,
+                   phase: Math.random() * Math.PI * 2});
+  }
+}
+
 const lasers = [];       // beams currently fading out
 const fragments = [];    // debris from exploded boulders
 const laserGeo = new THREE.CylinderGeometry(0.035, 0.035, 1, 6);
@@ -683,6 +711,11 @@ function explodeRock(rock){
       vx: Math.cos(a) * sp, vy: 1.5 + Math.random() * 3, vz: Math.sin(a) * sp,
       rx: (Math.random()-0.5) * 8, rz: (Math.random()-0.5) * 8}); // tumble rates
   }
+  /* only HALF the purple boulders hide emeralds — decided by a hash
+     of the rock's position, so it is deterministic per boulder but
+     you never know before blasting it */
+  if(rock.userData.golden && hash(P.x, P.z, 130) > 0.5)
+    spawnEmeralds(P.x, P.z, id);
   bump = 1;                            // the shockwave shakes the chassis
 }
 
@@ -1305,6 +1338,12 @@ function animate(){
   /* Polaris twinkles gently — a slow size pulse is enough to make it
      stand out from every other star in the sky */
   polarisMat.size = 6 + Math.sin(t * 2.5) * 1.2;
+  /* freed emeralds spin and bob in place, waiting to be collected
+     (the pickup feature will iterate this same array) */
+  for(const e of emeralds){
+    e.mesh.rotation.y = t * 2.2 + e.phase;
+    e.mesh.position.y = e.baseY + Math.sin(t * 2 + e.phase) * 0.08;
+  }
 
   /* headlights: the L key flips 'lightsOn'; the lamps stay softly lit
      when off so the rover front doesn't look broken */
