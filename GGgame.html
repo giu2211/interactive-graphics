@@ -9,6 +9,11 @@
                font-family: monospace; color: #ffd9b0; }
   #hud { position: absolute; top: 12px; left: 14px; font-size: 14px;
          line-height: 1.6; text-shadow: 0 1px 3px #000; user-select: none; }
+  /* emerald counter: hidden until the first gem is collected */
+  #gems { display: none; position: absolute; top: 12px; right: 16px;
+          font-size: 18px; font-weight: bold; color: #4dff7a;
+          text-shadow: 0 0 12px rgba(46, 204, 79, 0.7), 0 1px 3px #000;
+          user-select: none; }
 
   /* ---- start screen: overlays the live Mars scene ---- */
   #menu { position: fixed; inset: 0; z-index: 10;
@@ -64,15 +69,17 @@
       1/2 tilt head · 9/0 pan head<br>
       P grab red rock · O drop · T throw<br>
       F blast the purple rocks<br>
+      SPACE jump rockets<br>
       C eye view · L lights<br>
       M music · R reset
     </div>
   </div>
 
   <div id="hud">
-    ◀▲▼▶ drive &nbsp;·&nbsp; 1/2 tilt head &nbsp;·&nbsp; 9/0 pan head &nbsp;·&nbsp; P/O grab/drop &nbsp;·&nbsp; T throw &nbsp;·&nbsp; F shoot &nbsp;·&nbsp; C eye view &nbsp;·&nbsp; L lights &nbsp;·&nbsp; M music &nbsp;·&nbsp; R reset<br>
+    ◀▲▼▶ drive &nbsp;·&nbsp; 1/2 tilt head &nbsp;·&nbsp; 9/0 pan head &nbsp;·&nbsp; P/O grab/drop &nbsp;·&nbsp; T throw &nbsp;·&nbsp; F shoot &nbsp;·&nbsp; SPACE jump &nbsp;·&nbsp; C eye view &nbsp;·&nbsp; L lights &nbsp;·&nbsp; M music &nbsp;·&nbsp; R reset<br>
     <span id="info"></span>
   </div>
+  <div id="gems"></div>
  
   <!-- 1. the Three.js library, r128 — LOCAL copy, as required: the repo
        must contain all the source code including the used libraries -->

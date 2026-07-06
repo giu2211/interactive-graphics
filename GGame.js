@@ -627,6 +627,51 @@ function spawnEmeralds(x, z, rockId){
   }
 }
 
+/* =====================================================================
+   EMERALD PICKUP — drive over a gem to collect it.
+   Every frame the emeralds array is scanned (same array the bobbing
+   animation iterates); any gem within reach of the rover disappears
+   with a little sparkle. A green counter appears in the hud the moment
+   the first gem is collected and counts up to 15.
+   ===================================================================== */
+let gemCount = 0;
+const GEM_GOAL = 15;
+const PICKUP_DIST = 1.6;              // horizontal reach, in metres
+const gemHud = document.getElementById('gems');
+
+function collectEmeralds(){
+  for(let i = emeralds.length - 1; i >= 0; i--){
+    const m = emeralds[i].mesh;
+    const dx = m.position.x - px, dz = m.position.z - pz;
+    if(dx*dx + dz*dz > PICKUP_DIST * PICKUP_DIST) continue;
+    /* a burst of tiny green shards marks the pickup — reuses the
+       explosion-debris system, so the shards fall, bounce and fade */
+    spawnPickupSparkle(m.position);
+    scene.remove(m);
+    emeralds.splice(i, 1);
+    gemCount = Math.min(gemCount + 1, GEM_GOAL);
+    gemHud.style.display = 'block';   // first pickup reveals the counter
+    gemHud.textContent = '✦ ' + gemCount + ' / ' + GEM_GOAL +
+                         (gemCount >= GEM_GOAL ? '  ✓' : '');
+  }
+}
+
+/* a handful of tiny gem shards thrown upward; they ride the same
+   updateFragments physics as the boulder debris (fall, bounce, fade) */
+function spawnPickupSparkle(P){
+  for(let k = 0; k < 6; k++){
+    const fm = new THREE.Mesh(emeraldGeo, emeraldMat);
+    const s = 0.25 + Math.random() * 0.2;
+    fm.scale.set(s, s, s);
+    fm.position.copy(P);
+    const a = Math.random() * Math.PI * 2;
+    fragments.push({mesh: fm, life: 0.8 + Math.random() * 0.4,
+      vx: Math.cos(a) * 1.2, vy: 2 + Math.random() * 1.5, vz: Math.sin(a) * 1.2,
+      rx: (Math.random()-0.5) * 10, rz: (Math.random()-0.5) * 10});
+    scene.add(fm);
+  }
+}
+
 const lasers = [];       // beams currently fading out
 const fragments = [];    // debris from exploded boulders
 const laserGeo = new THREE.CylinderGeometry(0.035, 0.035, 1, 6);
@@ -1095,6 +1140,26 @@ const beacon = new THREE.Mesh(new THREE.SphereGeometry(0.04, 8, 6),
 beacon.position.set(0.59, 1.0, 0.4);
 chassis.add(beacon);
 
+/* --- JUMP ROCKETS (key SPACE): two small thruster bells bolted under
+       the rear of the hull, one per side, children of the rover group
+       so they follow every tilt. Each bell hides an emissive flame
+       cone that only shows — and flickers — while the rockets burn. --- */
+const flames = [];
+for(const sx of [-1, 1]){
+  const bell = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.16, 0.24, 10), steelMat);
+  bell.position.set(sx*0.45, 0.2, 0.45);
+  rover.add(bell);
+  const flame = new THREE.Mesh(
+    new THREE.ConeGeometry(0.12, 0.55, 8),
+    new THREE.MeshStandardMaterial({color: 0xffa03c, emissive: 0xff7722,
+      emissiveIntensity: 1.8, transparent: true, opacity: 0.85, fog: false}));
+  flame.rotation.x = Math.PI;          // cone tip pointing down
+  flame.position.set(sx*0.45, -0.15, 0.45);
+  flame.visible = false;               // off until lift-off
+  rover.add(flame);
+  flames.push(flame);
+}
+
 /* =====================================================================
    DRIVING = state + integration.
    The vehicle is three numbers: position (px,pz), heading, velocity.
@@ -1112,58 +1177,25 @@ let eyeView = false;   // C: false = chase camera, true = rover's eyes
 let lightsOn = true;   // L: headlights on/off
 let carried = null;    // the boulder mesh currently in the hands (or null)
 let reach = 0;         // arm extension 0..1, eased every frame
+let jumpH = 0;         // height ABOVE the terrain while jumping
+let jumpVel = 0;       // vertical speed of the jump
+let airborne = false;  // true from lift-off to touchdown
 
 /* =====================================================================
    MUSIC (key M) — browsers only allow audio AFTER a user gesture, so
-   everything is created lazily on the first M press.
-   Plan A: loop 'soundtrack.mp3' if such a file sits next to index.html
-           (use a track you have the rights to — the real Star Trek
-           theme is copyrighted, don't commit it to a public repo).
-   Plan B: if the file is missing, synthesize an ORIGINAL space-ambient
-           pad live with the Web Audio API: a slow-breathing chord of
-           detuned oscillators through a lowpass filter — no imported
-           assets, everything generated in code.
+   the Audio object is created lazily on the first M press.
+   Loops 'soundtrack.mp3', which sits next to index.html.
    ===================================================================== */
-let musicOn = false, musicFile = null, synth = null;
-function makeSynthPad(){
-  const ac = new (window.AudioContext || window.webkitAudioContext)();
-  const master = ac.createGain(); master.gain.value = 0;      // faded in below
-  const filter = ac.createBiquadFilter();
-  filter.type = 'lowpass'; filter.frequency.value = 900; filter.Q.value = 0.6;
-  filter.connect(master); master.connect(ac.destination);
-  /* a wide, quiet chord (A2, E3, A3, C#4, E4) with slight detune between
-     voices = the classic slow "space pad" sound */
-  for(const [f, det] of [[110,0],[164.8,3],[220,-4],[277.2,2],[329.6,-3]]){
-    const o = ac.createOscillator();
-    o.type = 'sawtooth'; o.frequency.value = f; o.detune.value = det;
-    const g = ac.createGain(); g.gain.value = 0.05;
-    /* each voice breathes at its own very slow rate */
-    const lfo = ac.createOscillator(), lg = ac.createGain();
-    lfo.frequency.value = 0.05 + Math.random() * 0.08; lg.gain.value = 0.03;
-    lfo.connect(lg); lg.connect(g.gain);
-    o.connect(g); g.connect(filter);
-    o.start(); lfo.start();
-  }
-  master.gain.linearRampToValueAtTime(1, ac.currentTime + 4); // slow fade-in
-  return {ac, master};
-}
+let musicOn = false, musicFile = null;
 function toggleMusic(){
   musicOn = !musicOn;
   if(musicOn){
-    if(!musicFile && !synth){
-      musicFile = new Audio('soundtrack.mp3');   // plan A
+    if(!musicFile){
+      musicFile = new Audio('soundtrack.mp3');
       musicFile.loop = true; musicFile.volume = 0.55;
-      musicFile.play().catch(() => {             // no file -> plan B
-        musicFile = null;
-        synth = makeSynthPad();
-      });
     }
-    else if(musicFile) musicFile.play();
-    else synth.ac.resume();
-  } else {
-    if(musicFile) musicFile.pause();
-    if(synth) synth.ac.suspend();
-  }
+    musicFile.play();
+  } else if(musicFile) musicFile.pause();
 }
 
 /* =====================================================================
@@ -1193,7 +1225,14 @@ addEventListener('keydown', e => {
   if(e.code === 'KeyO') dropRock();              // set the boulder down
   if(e.code === 'KeyT') throwRock();             // hurl it forward
   if(e.code === 'KeyF') shoot();                 // fire at the boulders
-  if(e.code === 'KeyR'){ px = 0; pz = 0; heading = 0; vel = 0; eyePitch = 0; eyeYaw = 0; }
+  /* SPACE fires the jump rockets — only from the ground, no double jump */
+  if(e.code === 'Space' && !airborne){
+    e.preventDefault();
+    airborne = true;
+    jumpVel = 4.8;      // lift-off speed: ~3 m apex under Mars gravity
+  }
+  if(e.code === 'KeyR'){ px = 0; pz = 0; heading = 0; vel = 0; eyePitch = 0; eyeYaw = 0;
+                         jumpH = 0; jumpVel = 0; airborne = false; }
 });
 addEventListener('keyup', e => keys[e.code] = false);
 
@@ -1242,6 +1281,7 @@ function animate(){
     if(mesh === carried) continue;
     if(mesh.userData.ghost) continue;   // just-thrown rock, still leaving the hands
     const R = mesh.userData.radius;
+    if(jumpH > R * 1.3 + 0.3) continue; // high enough: the rover flies OVER it
     const dx = px - mesh.position.x, dz = pz - mesh.position.z;
     const d2 = dx*dx + dz*dz;
     if(!mesh.userData.big){                        // small: always crossable
@@ -1264,9 +1304,28 @@ function animate(){
   /* the ground patch follows the rover: the world never ends */
   updateGround(px, pz);
 
-  /* place the rover on the terrain — just ask the height function */
+  /* --- jump: a simple ballistic arc ABOVE the terrain height.
+     jumpH is an offset over the ground, so terrain-following keeps
+     working underneath: land on a slope and you land ON the slope.
+     Real Mars gravity makes the arc pleasantly floaty. */
+  if(airborne){
+    jumpVel -= MARS_G * dt;
+    jumpH += jumpVel * dt;
+    if(jumpH <= 0){                    // touchdown
+      jumpH = 0; jumpVel = 0; airborne = false;
+      bump = 0.7;                      // landing jolt shakes the chassis
+    }
+  }
+  /* the flames burn only while the rockets push (rising); a random
+     vertical scale every frame makes them flicker like real exhaust */
+  for(const f of flames){
+    f.visible = airborne && jumpVel > 0;
+    if(f.visible) f.scale.set(1, 0.7 + Math.random() * 0.6, 1);
+  }
+
+  /* place the rover on the terrain (+ the jump offset) */
   const gy = terrainH(px, pz);
-  rover.position.set(px, gy, pz);
+  rover.position.set(px, gy + jumpH, pz);
 
   /* Tilt the rover to the slope.
      We build an orthonormal basis: 'up' is the terrain normal,
@@ -1338,12 +1397,12 @@ function animate(){
   /* Polaris twinkles gently — a slow size pulse is enough to make it
      stand out from every other star in the sky */
   polarisMat.size = 6 + Math.sin(t * 2.5) * 1.2;
-  /* freed emeralds spin and bob in place, waiting to be collected
-     (the pickup feature will iterate this same array) */
+  /* freed emeralds spin and bob in place, waiting to be collected */
   for(const e of emeralds){
     e.mesh.rotation.y = t * 2.2 + e.phase;
     e.mesh.position.y = e.baseY + Math.sin(t * 2 + e.phase) * 0.08;
   }
+  collectEmeralds();                   // drive over a gem to pick it up
 
   /* headlights: the L key flips 'lightsOn'; the lamps stay softly lit
      when off so the rover front doesn't look broken */
@@ -1355,9 +1414,9 @@ function animate(){
   /* --- chase camera: a point behind the rover, smoothed with lerp --- */
   const cx = px + Math.sin(heading) * 7;
   const cz = pz + Math.cos(heading) * 7;
-  const cy = Math.max(gy + 3.5, terrainH(cx, cz) + 1.5); // don't sink into hills
+  const cy = Math.max(gy + jumpH + 3.5, terrainH(cx, cz) + 1.5); // don't sink into hills
   camera.position.lerp(new THREE.Vector3(cx, cy, cz), Math.min(dt * 3, 1));
-  camera.lookAt(px, gy + 1, pz);
+  camera.lookAt(px, gy + jumpH + 1, pz);
 
   /* --- HUD --- */
   document.getElementById('info').textContent =
