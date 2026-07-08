@@ -1485,6 +1485,7 @@ function updateLaunch(dt){
     if(ship.position.y > 260){                 // far above the fog: gone
       ship.visible = false;
       launchPhase = 3;
+      setTimeout(() => location.reload(), 5000);   // victory: back to the menu
     }
   }
 }
