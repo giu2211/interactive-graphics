@@ -1,9 +1,9 @@
-# GGame: Where No One Has Gone Before
+# GGame: Where No One Has Gone Before 🚀
 
 *A Mars rover adventure built from scratch in Three.js*
 
-**Interactive Graphics Project ** · Prof. Marco Schaerf · Sapienza University of Rome
 Author: **Giulis Grossi** · July 2026 · project "GGame"
+Interactive Graphics Project, Sapienza University of Rome
 
 ## ▶ Play it now
 
