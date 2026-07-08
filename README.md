@@ -2,8 +2,7 @@
 
 *A Mars rover adventure built from scratch in Three.js*
 
-Author: **Giulis Grossi** · July 2026 · project "GGame"
-Interactive Graphics Project, Sapienza University of Rome
+Author: **Giulia Grossi** · July 2026
 
 ## ▶ Play it now
 
