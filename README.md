@@ -6,7 +6,7 @@ Author: **Giulia Grossi** · July 2026
 
 ## ▶ Play it now
 
-**Live demo (GitHub Pages): **
+**Live demo (GitHub Pages): https://giu2211.github.io/interactive-graphics/ **
 
 No installation, no build step: the game runs entirely in the browser.
 To run it locally, just open `index.html` (any modern browser; a local
