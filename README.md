@@ -1,4 +1,4 @@
-# Where No One Has Gone Before — GGame
+# Where No One Has Gone Before: GGame
 
 An interactive 3D game built with [Three.js](https://threejs.org/) (r128) for the Interactive Graphics course. You drive a rover across a procedurally generated Mars surface, collect emerald crystals, load red boulders onto a rocket's cargo pad and, once both goals are met, watch the ship lift off — leaving "MISSION ACCOMPLISHED" written in the stars as a brand-new constellation.
 
