@@ -127,6 +127,105 @@ let polarisMat;                        // twinkled in the animation loop
     new THREE.BufferGeometry().setFromPoints([lp[0]]), polarisMat));
 }
 
+/* =====================================================================
+   VICTORY CONSTELLATION — "MISSION ACCOMPLISHED" written in the sky.
+   Each letter is a tiny star chart (points + faint joining lines) in
+   the same style as the Dippers. It is built the moment the rocket
+   climbs away, centred on the patch of sky it is climbing into, and
+   fades in slowly — as if those stars had always been there.
+   ===================================================================== */
+const skyTextMats = [];   // {mat, target} — faded in by the loop
+const skyStarMats = [];   // the star materials only — they twinkle
+let   skyTextBuilt = false;
+
+/* a minimal stroke font: x spans 0..w, y spans 0..1, seg joins points */
+const SKY_FONT = {
+  M: {w:.8,  pts:[[0,0],[0,1],[.4,.45],[.8,1],[.8,0]],
+             seg:[[0,1],[1,2],[2,3],[3,4]]},
+  I: {w:.2,  pts:[[.1,0],[.1,.5],[.1,1]], seg:[[0,1],[1,2]]},
+  S: {w:.6,  pts:[[.6,1],[0,1],[0,.5],[.6,.5],[.6,0],[0,0]],
+             seg:[[0,1],[1,2],[2,3],[3,4],[4,5]]},
+  O: {w:.6,  pts:[[0,0],[0,1],[.6,1],[.6,0]],
+             seg:[[0,1],[1,2],[2,3],[3,0]]},
+  N: {w:.7,  pts:[[0,0],[0,1],[.7,0],[.7,1]], seg:[[0,1],[1,2],[2,3]]},
+  A: {w:.7,  pts:[[0,0],[.35,1],[.7,0],[.18,.5],[.52,.5]],
+             seg:[[0,1],[1,2],[3,4]]},
+  C: {w:.6,  pts:[[.6,1],[0,1],[0,0],[.6,0]], seg:[[0,1],[1,2],[2,3]]},
+  P: {w:.6,  pts:[[0,0],[0,1],[.6,1],[.6,.55],[0,.55]],
+             seg:[[0,1],[1,2],[2,3],[3,4]]},
+  L: {w:.6,  pts:[[0,1],[0,0],[.6,0]], seg:[[0,1],[1,2]]},
+  H: {w:.7,  pts:[[0,0],[0,1],[.7,0],[.7,1],[0,.5],[.7,.5]],
+             seg:[[0,1],[2,3],[4,5]]},
+  E: {w:.6,  pts:[[.6,1],[0,1],[0,.5],[.5,.5],[0,0],[.6,0]],
+             seg:[[0,1],[1,2],[2,3],[2,4],[4,5]]},
+  D: {w:.65, pts:[[0,0],[0,1],[.5,.88],[.65,.5],[.5,.12]],
+             seg:[[0,1],[1,2],[2,3],[3,4],[4,0]]},
+};
+
+/* writes ONE word onto the sky sphere, centred at azimuth az0 with its
+   baseline at elevation el0; s = letter height in radians */
+function skyWord(word, az0, el0, s){
+  const R = 420;                          // just inside the star shell
+  const dir = (az, el) => new THREE.Vector3(
+      Math.sin(az) * Math.cos(el),
+      Math.sin(el),
+     -Math.cos(az) * Math.cos(el)).multiplyScalar(R);
+  /* letters get squeezed horizontally by cos(el) that high up —
+     stretch the azimuth offsets by the inverse so the text reads flat */
+  const gap = 0.35 * s, str = 1 / Math.cos(el0 + s * 0.5);
+  let width = -gap;
+  for(const ch of word) width += SKY_FONT[ch].w * s + gap;
+  let ax = az0 - width * str / 2;
+
+  const stars = [], lines = [];
+  for(const ch of word){
+    const g = SKY_FONT[ch];
+    const p = g.pts.map(([x, y]) => dir(ax + x * s * str, el0 + y * s));
+    stars.push(...p);
+    for(const [a, b] of g.seg) lines.push(p[a], p[b]);
+    ax += (g.w * s + gap) * str;
+  }
+  /* the letter vertices are the BRIGHT stars of the constellation:
+     big, warm yellow — the same tint as Polaris, just deeper */
+  const sm = new THREE.PointsMaterial({color: 0xffe28a, size: 6.5,
+    sizeAttenuation: false, fog: false, transparent: true, opacity: 0});
+  skyGroup.add(new THREE.Points(
+    new THREE.BufferGeometry().setFromPoints(stars), sm));
+  /* the strokes are FILLED with lesser stars: scattered along each
+     segment at uneven steps, nudged slightly off the line and split
+     into two magnitudes — so the words read as a REAL constellation,
+     not as drawn lines */
+  const dim = [], mid = [];
+  for(let i = 0; i < lines.length; i += 2){
+    const a = lines[i], b = lines[i + 1];
+    const n = Math.ceil(a.distanceTo(b) / 2.2);   // a star every ~2 units
+    for(let k = 1; k < n; k++){
+      const p = a.clone().lerp(b, (k + (Math.random() - 0.5) * 0.5) / n);
+      p.x += (Math.random() - 0.5) * 0.8;         // a touch of scatter
+      p.y += (Math.random() - 0.5) * 0.8;
+      p.z += (Math.random() - 0.5) * 0.8;
+      (Math.random() < 0.35 ? mid : dim).push(p); // two star magnitudes
+    }
+  }
+  const mm = new THREE.PointsMaterial({color: 0xffe9a8, size: 3.6,
+    sizeAttenuation: false, fog: false, transparent: true, opacity: 0});
+  const dm = new THREE.PointsMaterial({color: 0xfff3c8, size: 2.2,
+    sizeAttenuation: false, fog: false, transparent: true, opacity: 0});
+  skyGroup.add(new THREE.Points(
+    new THREE.BufferGeometry().setFromPoints(mid), mm));
+  skyGroup.add(new THREE.Points(
+    new THREE.BufferGeometry().setFromPoints(dim), dm));
+  skyTextMats.push({mat: sm, target: 1},
+                   {mat: mm, target: 0.95}, {mat: dm, target: 0.8});
+  skyStarMats.push(sm);
+}
+
+/* the two words, stacked, centred where the ship went up */
+function buildSkyText(az0){
+  skyWord('MISSION',      az0, 0.60, 0.085);
+  skyWord('ACCOMPLISHED', az0, 0.44, 0.062);
+}
+
 /* keep canvas and camera in sync with the window size */
 addEventListener('resize', () => {
   camera.aspect = innerWidth/innerHeight;
@@ -561,6 +660,12 @@ function dropRock(){
   const x = px - Math.sin(heading) * d, z = pz - Math.cos(heading) * d;
   carried.position.set(x, terrainH(x, z) + R * 0.18, z);
   carried.rotation.x = 0; carried.rotation.z = 0;   // lies flat again
+  /* dropped ON THE CARGO PAD: the boulder is loaded, not placed */
+  if(onPad(x, z)){
+    loadRockIntoRocket(carried);
+    carried = null;
+    return;
+  }
   movedRocks.set(carried.userData.id, {x, z});      // bookkeeping
   placedRocks.push(carried);                        // permanent obstacle now
   carried = null;                                   // arms retract in the loop
@@ -632,10 +737,11 @@ function spawnEmeralds(x, z, rockId){
    Every frame the emeralds array is scanned (same array the bobbing
    animation iterates); any gem within reach of the rover disappears
    with a little sparkle. A green counter appears in the hud the moment
-   the first gem is collected and counts up to 15.
+   the first gem is collected and counts up to GEM_GOAL (set by the
+   game mode picked on the start screen).
    ===================================================================== */
 let gemCount = 0;
-const GEM_GOAL = 15;
+let GEM_GOAL = 10;     // set by the menu mode buttons: EASY 10 · HARD 17
 const PICKUP_DIST = 1.6;              // horizontal reach, in metres
 const gemHud = document.getElementById('gems');
 
@@ -653,6 +759,7 @@ function collectEmeralds(){
     gemHud.style.display = 'block';   // first pickup reveals the counter
     gemHud.textContent = '✦ ' + gemCount + ' / ' + GEM_GOAL +
                          (gemCount >= GEM_GOAL ? '  ✓' : '');
+    checkLaunch();     // the last gem can be what completes the mission
   }
 }
 
@@ -876,10 +983,15 @@ function updateFlyingRocks(dt){
       const sp2 = Math.hypot(f.vx, f.vz);
       const brake = 0.35 * MARS_G * dt;
       if(sp2 <= brake){                           // friction wins: at rest
+        flyingRocks.splice(i, 1);
+        /* came to rest ON THE CARGO PAD: loaded into the rocket */
+        if(onPad(x, z)){
+          loadRockIntoRocket(m);
+          continue;
+        }
         m.userData.ghost = false;                 // fully solid again
         movedRocks.set(m.userData.id, {x, z});    // bookkeeping
         placedRocks.push(m);                      // obstacle again
-        flyingRocks.splice(i, 1);
         continue;
       }
       f.vx -= f.vx / sp2 * brake;                 // brake against the motion
@@ -1161,6 +1273,223 @@ for(const sx of [-1, 1]){
 }
 
 /* =====================================================================
+   THE ROCKET (the endgame goal): parked on a platform some 45 m from
+   the landing site, with a loading RAMP and a glowing CARGO PAD at its
+   base. Drop (O) or throw (T) red boulders onto the pad: each one is
+   loaded into the hold — it disappears for good and a counter in the
+   HUD ticks up. With at least 10 rocks aboard the status lights over
+   the hatch (and the pad itself) turn GREEN: the rocket is fuelled
+   and ready for the final lift-off.
+   ===================================================================== */
+const ROCKET_X = 18, ROCKET_Z = -42;   // where the rocket stands
+const PAD_DX = 0, PAD_DZ = 6.0;        // cargo pad centre, past the ramp foot
+const PAD_R = 2.6;                     // pad radius: dropping inside counts
+let ROCKET_GOAL = 5;                   // set by the menu: EASY 5 · HARD 12
+let rocketRocks = 0;                   // boulders loaded so far
+let rocketReady = false;               // true once the hold is full
+const statusMats = [];                 // hatch lamps: red -> green when ready
+let padMat;                            // the pad glow, pulsed in the loop
+let ship, shipFlame;                   // the part that lifts off + its exhaust
+let launchPhase = 0;                   // 0 idle · 1 countdown · 2 flying · 3 gone
+let launchT = 0;                       // countdown seconds left / flight time
+
+/* =====================================================================
+   MISSION TIMER — 5 minutes, same in both modes. It starts ticking the
+   FIRST time a rock is loaded onto the pad and shows mm:ss at the top
+   centre of the screen (red in the last 30 s). Reaching the launch
+   countdown in time stops it; running out ends the mission — TIME'S
+   UP fills the screen and the game reloads back to the menu.
+   ===================================================================== */
+const MISSION_TIME = 300;              // 5 minutes, in seconds
+let timeLeft = 0;
+let timerOn = false;
+const timerEl = document.getElementById('timer');
+
+function updateTimer(dt){
+  if(!timerOn) return;
+  if(launchPhase > 0){                 // lift-off underway: made it in time
+    timerOn = false;
+    timerEl.style.display = 'none';
+    return;
+  }
+  timeLeft -= dt;
+  if(timeLeft <= 0){                   // out of time: mission failed
+    timerOn = false;
+    timerEl.style.display = 'none';
+    const countEl = document.getElementById('count');
+    countEl.style.display = 'flex';
+    countEl.textContent = "TIME'S UP!";
+    setTimeout(() => location.reload(), 3500);   // back to the menu
+    return;
+  }
+  const m = Math.floor(timeLeft / 60);
+  const s = Math.floor(timeLeft % 60);
+  timerEl.style.display = 'block';
+  timerEl.textContent = m + ':' + String(s).padStart(2, '0');
+  timerEl.style.color = timeLeft < 30 ? '#ff5544' : '#ffd9b0';  // urgency!
+}
+
+const rocket = new THREE.Group();
+{
+  const ry = terrainH(ROCKET_X, ROCKET_Z);
+  rocket.position.set(ROCKET_X, ry, ROCKET_Z);
+  scene.add(rocket);
+  /* the rocket's own livery: BLUE hull, RED nose, deep blue fins,
+     WHITE platform/hatch/ramp (dedicated materials — steelMat and
+     rustMat are shared with the rover and must not be recolored) */
+  const hullMat = new THREE.MeshStandardMaterial({color: 0x2e6fd6,
+    roughness: 0.35, metalness: 0.7});
+  const trimMat = new THREE.MeshStandardMaterial({color: 0x1a3f8f,
+    roughness: 0.4,  metalness: 0.65});
+  const noseMat = new THREE.MeshStandardMaterial({color: 0xd63030,
+    roughness: 0.4,  metalness: 0.6});
+  const whiteMat = new THREE.MeshStandardMaterial({color: 0xf2f2ee,
+    roughness: 0.45, metalness: 0.35});
+  /* the SHIP sub-group: everything that lifts off lives here (body,
+     nose, fins, hatch, lamps, exhaust flame) — platform, ramp and pad
+     stay on the ground when it launches */
+  ship = new THREE.Group();
+  rocket.add(ship);
+  /* launch platform + body + nose: classic retro rocket silhouette */
+  const plat = new THREE.Mesh(new THREE.CylinderGeometry(2.4, 2.8, 0.5, 16), whiteMat);
+  plat.position.y = 0.25; rocket.add(plat);
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(1.0, 1.15, 4.2, 14), hullMat);
+  body.position.y = 2.6; ship.add(body);
+  const nose = new THREE.Mesh(new THREE.ConeGeometry(1.02, 1.7, 14), noseMat);
+  nose.position.y = 5.55; ship.add(nose);
+  /* three fins around the tail */
+  for(let k = 0; k < 3; k++){
+    const fin = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.6, 0.9), trimMat);
+    const a = k * Math.PI * 2 / 3;
+    fin.position.set(Math.sin(a) * 1.15, 1.1, Math.cos(a) * 1.15);
+    fin.rotation.y = a;
+    ship.add(fin);
+  }
+  /* cargo hatch facing the ramp (+Z side, toward the landing site) */
+  const hatchR = new THREE.Mesh(new THREE.BoxGeometry(0.9, 1.1, 0.1), whiteMat);
+  hatchR.position.set(0, 1.6, 1.08); ship.add(hatchR);
+  /* three status lamps above the hatch — red until the hold is full */
+  for(let k = -1; k <= 1; k++){
+    const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.09, 8, 6),
+      new THREE.MeshStandardMaterial({color: 0xff3b30,
+        emissive: 0xa11510, emissiveIntensity: 1.2}));
+    lamp.position.set(k * 0.32, 2.35, 1.06);
+    ship.add(lamp);
+    statusMats.push(lamp.material);
+  }
+  /* the exhaust flame under the tail: hidden until lift-off, then it
+     flickers every frame like the rover's little jump rockets */
+  shipFlame = new THREE.Mesh(
+    new THREE.ConeGeometry(0.85, 3.2, 12),
+    new THREE.MeshStandardMaterial({color: 0xffa03c, emissive: 0xff7722,
+      emissiveIntensity: 2.0, transparent: true, opacity: 0.9, fog: false}));
+  shipFlame.rotation.x = Math.PI;       // tip pointing DOWN
+  shipFlame.position.y = -1.1;
+  shipFlame.visible = false;
+  ship.add(shipFlame);
+  /* loading ramp: foot on the ground by the pad, top at the hatch */
+  const ramp = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.12, 4.6), whiteMat);
+  ramp.position.set(0, 0.85, 3.2);
+  ramp.rotation.x = 0.35;             // +Z end down at the pad, -Z end up
+  rocket.add(ramp);
+  /* the CARGO PAD: a glowing disc lying on the terrain at the ramp foot */
+  padMat = new THREE.MeshStandardMaterial({color: 0x552222,
+    emissive: 0xcc3322, emissiveIntensity: 0.7,
+    transparent: true, opacity: 0.85});
+  const pad = new THREE.Mesh(new THREE.CircleGeometry(PAD_R, 24), padMat);
+  pad.rotation.x = -Math.PI/2;
+  pad.position.set(PAD_DX,
+    terrainH(ROCKET_X + PAD_DX, ROCKET_Z + PAD_DZ) - ry + 0.05, PAD_DZ);
+  rocket.add(pad);
+}
+
+/* is a world point inside the cargo pad? */
+function onPad(x, z){
+  const dx = x - (ROCKET_X + PAD_DX), dz = z - (ROCKET_Z + PAD_DZ);
+  return dx*dx + dz*dz < PAD_R * PAD_R;
+}
+
+/* a boulder landed on the pad: load it into the hold. Same permanent
+   bookkeeping as the explosion — the rock leaves the world for good. */
+const cargoHud = document.getElementById('cargo');
+function loadRockIntoRocket(mesh){
+  activeRocks.delete(mesh.userData.id);
+  const pi = placedRocks.indexOf(mesh);
+  if(pi >= 0) placedRocks.splice(pi, 1);
+  movedRocks.set(mesh.userData.id, null);      // generator: never respawn it
+  rockGroup.remove(mesh);
+  rockPool.push(mesh);                         // recycled by the generator
+  /* the FIRST rock on the pad starts the 5-minute mission timer */
+  if(!timerOn && timeLeft === 0 && launchPhase === 0){
+    timerOn = true;
+    timeLeft = MISSION_TIME;
+  }
+  rocketRocks++;
+  cargoHud.style.display = 'block';            // first rock reveals the counter
+  cargoHud.textContent = '● ' + rocketRocks + ' / ' + ROCKET_GOAL +
+                         (rocketRocks >= ROCKET_GOAL ? '  ✓' : '');
+  if(rocketRocks >= ROCKET_GOAL && !rocketReady){
+    rocketReady = true;
+    for(const sm of statusMats){
+      sm.color.setHex(0x2eff6a); sm.emissive.setHex(0x1daa44);
+    }
+    padMat.color.setHex(0x225522); padMat.emissive.setHex(0x1daa44);
+  }
+  checkLaunch();
+}
+
+/* lift-off needs BOTH goals: the hold full of rocks AND all the
+   emeralds collected — called after every rock load and gem pickup */
+function checkLaunch(){
+  if(launchPhase === 0 && rocketReady && gemCount >= GEM_GOAL){
+    launchPhase = 1; launchT = 3;              // start the countdown: 3, 2, 1...
+  }
+}
+
+/* =====================================================================
+   LAUNCH SEQUENCE — runs once the hold is full.
+   Phase 1: a big 3 · 2 · 1 countdown in the middle of the screen.
+   Phase 2: the ship (body, nose, fins — NOT platform/ramp/pad) climbs
+            on an accelerating arc with a flickering exhaust flame,
+            slowly rolling, until it is far above the fog and vanishes.
+   ===================================================================== */
+const countEl = document.getElementById('count');
+function updateLaunch(dt){
+  if(launchPhase === 1){                       // countdown
+    launchT -= dt;
+    const n = Math.ceil(launchT);
+    countEl.style.display = 'flex';   // flex = the number sits dead centre
+    countEl.textContent = n > 0 ? n : 'LIFT-OFF!';
+    if(launchT <= -0.8){                       // LIFT-OFF! lingers a beat
+      countEl.style.display = 'none';
+      launchPhase = 2; launchT = 0;
+      shipFlame.visible = true;
+    }
+  }
+  else if(launchPhase === 2){                  // climbing
+    launchT += dt;
+    /* a gentle, MAJESTIC ascent: barely lifting for the first seconds
+       (the flame roaring on the pad), then slowly gathering speed —
+       about 17 s from ignition to vanishing point */
+    ship.position.y = launchT * launchT * 0.9;
+    ship.rotation.y += dt * 0.25;              // a slow, elegant roll
+    shipFlame.scale.set(1, 0.8 + Math.random() * 0.5, 1);  // flicker
+    /* 10 s into the climb, with the rocket still shrinking into the
+       sky, MISSION ACCOMPLISHED fades in among the stars — a brand
+       new constellation, centred on the sky the ship is climbing into */
+    if(launchT >= 10 && !skyTextBuilt){
+      skyTextBuilt = true;
+      const dx = ROCKET_X - px, dz = ROCKET_Z - pz;
+      buildSkyText(dx*dx + dz*dz > 1 ? Math.atan2(dx, -dz) : -heading);
+    }
+    if(ship.position.y > 260){                 // far above the fog: gone
+      ship.visible = false;
+      launchPhase = 3;
+    }
+  }
+}
+
+/* =====================================================================
    DRIVING = state + integration.
    The vehicle is three numbers: position (px,pz), heading, velocity.
    Each frame: read keys -> update velocity/heading -> move -> then just
@@ -1209,6 +1538,22 @@ document.getElementById('playBtn').addEventListener('click', () => {
   started = true;
   document.getElementById('menu').style.display = 'none';
 });
+
+/* GAME MODES — picked on the start screen, before PLAY:
+   EASY: 10 crystals + 5 rocks · HARD: 17 crystals + 12 rocks.
+   Switching mode rewrites the goals and every number shown in the
+   hints (the .goalGems / .goalRocks spans). Easy is the default. */
+function setMode(hard){
+  GEM_GOAL    = hard ? 17 : 10;
+  ROCKET_GOAL = hard ? 12 : 5;
+  document.getElementById('easyBtn').classList.toggle('on', !hard);
+  document.getElementById('hardBtn').classList.toggle('on', hard);
+  for(const el of document.querySelectorAll('.goalGems'))  el.textContent = GEM_GOAL;
+  for(const el of document.querySelectorAll('.goalRocks')) el.textContent = ROCKET_GOAL;
+}
+document.getElementById('easyBtn').addEventListener('click', () => setMode(false));
+document.getElementById('hardBtn').addEventListener('click', () => setMode(true));
+setMode(false);                        // easy by default
 document.getElementById('musicBtn').addEventListener('click', e => {
   toggleMusic();
   e.target.classList.toggle('on', musicOn);
@@ -1224,15 +1569,21 @@ addEventListener('keydown', e => {
   if(e.code === 'KeyP') grabRock();              // stretch the arms and grab
   if(e.code === 'KeyO') dropRock();              // set the boulder down
   if(e.code === 'KeyT') throwRock();             // hurl it forward
-  if(e.code === 'KeyF') shoot();                 // fire at the boulders
-  /* SPACE fires the jump rockets — only from the ground, no double jump */
-  if(e.code === 'Space' && !airborne){
+  /* hands full = no shooting: the arms hold the boulder right in front
+     of the head, the laser would blast the cargo */
+  if(e.code === 'KeyF' && !carried) shoot();     // fire at the boulders
+  /* SPACE fires the jump rockets — only from the ground, no double
+     jump, and NOT while carrying a boulder: too heavy to lift */
+  if(e.code === 'Space' && !airborne && !carried){
     e.preventDefault();
     airborne = true;
     jumpVel = 4.8;      // lift-off speed: ~3 m apex under Mars gravity
   }
   if(e.code === 'KeyR'){ px = 0; pz = 0; heading = 0; vel = 0; eyePitch = 0; eyeYaw = 0;
                          jumpH = 0; jumpVel = 0; airborne = false; }
+  /* V — shortcut straight to the finale: the 3·2·1 countdown, lift-off
+     and the constellation, no rocks or crystals needed */
+  if(e.code === 'KeyV' && launchPhase === 0){ launchPhase = 1; launchT = 3; }
 });
 addEventListener('keyup', e => keys[e.code] = false);
 
@@ -1297,6 +1648,18 @@ function animate(){
       px = mesh.position.x + dx/d * rr;            // back out to the contact circle
       pz = mesh.position.z + dz/d * rr;
       vel = 0;                                     // the impact stops the rover
+    }
+  }
+  /* the rocket platform is solid too (pad and ramp are drive-over) */
+  {
+    const dx = px - ROCKET_X, dz = pz - ROCKET_Z;
+    const rr = 2.8 + 1.0;                          // platform radius + rover
+    const d2 = dx*dx + dz*dz;
+    if(d2 < rr*rr && jumpH < 4){                   // you can't jump THAT high
+      const d = Math.sqrt(d2) || 1e-6;
+      px = ROCKET_X + dx/d * rr;
+      pz = ROCKET_Z + dz/d * rr;
+      vel = 0;
     }
   }
   bump = Math.max(0, bump - dt * 4);               // the jolt fades out quickly
@@ -1397,12 +1760,21 @@ function animate(){
   /* Polaris twinkles gently — a slow size pulse is enough to make it
      stand out from every other star in the sky */
   polarisMat.size = 6 + Math.sin(t * 2.5) * 1.2;
+  /* the victory constellation: a slow fade-in, then the same gentle
+     twinkle as Polaris so it reads as real stars */
+  for(const ft of skyTextMats)
+    ft.mat.opacity += (ft.target - ft.mat.opacity) * Math.min(dt * 0.5, 1);
+  for(const stm of skyStarMats) stm.size = 6.5 + Math.sin(t * 2.8) * 1.3;
   /* freed emeralds spin and bob in place, waiting to be collected */
   for(const e of emeralds){
     e.mesh.rotation.y = t * 2.2 + e.phase;
     e.mesh.position.y = e.baseY + Math.sin(t * 2 + e.phase) * 0.08;
   }
   collectEmeralds();                   // drive over a gem to pick it up
+  /* the cargo pad breathes so it reads as "put things HERE" */
+  padMat.emissiveIntensity = 0.55 + Math.sin(t * 3) * 0.25;
+  updateLaunch(dt);                    // countdown + lift-off, when ready
+  updateTimer(dt);                     // 5-minute mission clock, once running
 
   /* headlights: the L key flips 'lightsOn'; the lamps stay softly lit
      when off so the rover front doesn't look broken */
@@ -1416,7 +1788,23 @@ function animate(){
   const cz = pz + Math.cos(heading) * 7;
   const cy = Math.max(gy + jumpH + 3.5, terrainH(cx, cz) + 1.5); // don't sink into hills
   camera.position.lerp(new THREE.Vector3(cx, cy, cz), Math.min(dt * 3, 1));
-  camera.lookAt(px, gy + jumpH + 1, pz);
+  /* during lift-off the camera tilts up, following the ship into the
+     stars — and stays there, framing the constellation it leaves behind */
+  if(launchPhase >= 2){
+    const g = Math.min(launchT / 5, 1);            // ease into the tilt
+    const dx = ROCKET_X - camera.position.x;
+    const dz = ROCKET_Z - camera.position.z;
+    const dh = Math.max(Math.hypot(dx, dz), 0.001);
+    const sy = rocket.position.y + ship.position.y + 6 - camera.position.y;
+    const el = Math.min(Math.atan2(sy, dh), 0.55); // don't crane past the text
+    const look = new THREE.Vector3(px, gy + jumpH + 1, pz).lerp(
+      new THREE.Vector3(
+        camera.position.x + (dx / dh) * Math.cos(el) * 60,
+        camera.position.y + Math.sin(el) * 60,
+        camera.position.z + (dz / dh) * Math.cos(el) * 60), g);
+    camera.lookAt(look);
+  }
+  else camera.lookAt(px, gy + jumpH + 1, pz);
 
   /* --- HUD --- */
   document.getElementById('info').textContent =
